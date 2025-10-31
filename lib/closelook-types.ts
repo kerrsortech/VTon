@@ -7,6 +7,8 @@ export interface Product {
   price: number
   images: string[]
   description: string
+  url?: string // Optional product page URL for enhanced analysis
+  sizes?: string[] // Available sizes (e.g., ["S", "M", "L", "XL"] for clothing, ["7", "8", "9", "10", "11"] for shoes)
 }
 
 export interface TryOnRequest {

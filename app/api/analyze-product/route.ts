@@ -1,5 +1,10 @@
 import { GoogleGenAI } from "@google/genai"
 import { type NextRequest, NextResponse } from "next/server"
+import {
+  analyzeProductPage,
+  buildEnhancedProductDescription,
+  enhancePromptWithPageAnalysis,
+} from "@/lib/product-page-analyzer"
 
 async function convertImageToBase64(file: File): Promise<string> {
   try {
@@ -20,10 +25,33 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData()
     const userPhoto = formData.get("userPhoto") as File
     const productImage = formData.get("productImage") as File
+    const productUrl = formData.get("productUrl") as string | null
 
     if (!userPhoto || !productImage) {
       console.log("[v0] Error: User photo or product image missing")
       return NextResponse.json({ error: "Both user photo and product image are required" }, { status: 400 })
+    }
+
+    // Optional: Analyze product page URL for enhanced product understanding
+    let pageAnalysis = null
+    if (productUrl && productUrl.trim().length > 0 && productUrl.startsWith("http")) {
+      console.log("[v0] Product page URL provided, analyzing page:", productUrl)
+      try {
+        const apiKey = process.env.GOOGLE_GEMINI_API_KEY
+        if (apiKey) {
+          // Analyze product page in parallel with image analysis
+          pageAnalysis = await analyzeProductPage(productUrl, apiKey).catch((error) => {
+            console.warn("[v0] Product page analysis failed, continuing without it:", error)
+            return null
+          })
+
+          if (pageAnalysis) {
+            console.log("[v0] Product page analysis successful")
+          }
+        }
+      } catch (error) {
+        console.warn("[v0] Error during product page analysis, continuing without it:", error)
+      }
     }
 
     console.log("[v0] User photo received:", userPhoto.name, userPhoto.type, userPhoto.size, "bytes")
@@ -79,7 +107,10 @@ CRITICAL: Analyze the USER PHOTO (first image) for userCharacteristics, NOT the 
 Rules and details to produce:
 
 1) productCategory (from PRODUCT IMAGE - second image):
- - Provide the most specific shopper-facing category (e.g., "Running Shoes", "Leather Crossbody Bag", "Sunglasses - Aviator").
+ - Identify the product type from one of these main categories: Clothing (T-Shirts, Shirts, Hoodies, Sweaters, Jackets, Jeans, Pants, Shorts, Dresses), Footwear (Sneakers, Shoes, Boots, Sandals), Headwear (Sunglasses, Glasses, Caps, Hats, Beanies), Accessories (Watches, Necklaces, Earrings, Bracelets, Rings, Bags, Backpacks, Belts, Scarves, Gloves).
+ - For BAGS, be very specific: "Handbag", "Shoulder Bag", "Crossbody Bag", "Backpack", "Tote Bag", "Clutch", "Belt Bag", "Mini Purse" - NOT just "Bag". Be specific about the bag type.
+ - Return the most specific category name (e.g., "Running Shoes", "Leather Crossbody Bag", "Sunglasses", "T-Shirt", "Wristwatch", "Handbag", "Shoulder Bag").
+ - Be specific about the product type but concise.
  - If unsure, return "Unknown".
 
 2) detailedVisualDescription (from PRODUCT IMAGE - second image, 2–4 concise sentences):
@@ -132,11 +163,12 @@ Rules and details to produce:
 9) forcePoseChange & targetFraming (DETERMINISTIC, based on PRODUCT IMAGE - second image):
  - forcePoseChange: true  // ALWAYS true: generator MUST change pose, angle, clothing, background as needed.
  - targetFraming: a single value chosen from { "full-body", "three-quarter", "upper-body", "head-and-shoulders", "mid-shot" } depending on productCategory. Rules:
-    • Shoes, Pants, Full-length garments -> "full-body"
-    • Jackets, Dresses (if length unknown), Bags (if worn) -> "three-quarter" or "full-body" favor full-body when uncertain
-    • Sunglasses, Earrings, Necklaces, Watches -> "head-and-shoulders" or "mid-shot" (show upper body & accessories)
-    • Small accessories (rings, small studs) -> "upper-body" or "mid-shot" as appropriate
- - Gemini must set targetFraming based on the productCategory it identifies. Do NOT ask for permission — always change to the chosen framing.
+    • Footwear (shoes, sneakers, boots, sandals), Lower body clothing (pants, jeans, shorts, skirts), Full-body garments (dresses, jumpsuits) -> "full-body"
+    • Upper body clothing (shirts, t-shirts, hoodies, jackets, coats, sweaters) -> "three-quarter"
+    • Headwear (sunglasses, glasses, caps, hats, beanies), Small jewelry (earrings, small necklaces) -> "head-and-shoulders"
+    • Watches, Bracelets, Necklaces (larger), Bags (when worn/held) -> "mid-shot"
+    • Small accessories (rings, small studs), Belts -> "upper-body" or "mid-shot" as appropriate
+ - Gemini must set targetFraming based on the productCategory it identifies. Use these rules strictly. Do NOT ask for permission — always change to the chosen framing.
 
 10) backgroundInstruction (from PRODUCT IMAGE - second image):
  - Return a short description of the studio background (e.g., "neutral light-gray gradient (#e6e6e6 center), softbox key + soft fill + subtle rim light").
@@ -202,11 +234,36 @@ REMEMBER: Analyze USER PHOTO (first image) for userCharacteristics, and PRODUCT 
       )
     }
 
-    const productMetadata = JSON.parse(jsonMatch[0])
+    let productMetadata = JSON.parse(jsonMatch[0])
     console.log("[v0] Product metadata extracted:")
     console.log("[v0] - Category:", productMetadata.productCategory)
     console.log("[v0] - Detailed Description:", productMetadata.detailedVisualDescription)
     console.log("[v0] - Image Generation Prompt:", productMetadata.imageGenerationPrompt)
+
+    // Enhance product description with page analysis if available
+    if (pageAnalysis) {
+      console.log("[v0] Enhancing product description with page analysis")
+      const originalDescription = productMetadata.detailedVisualDescription || ""
+      productMetadata.detailedVisualDescription = buildEnhancedProductDescription(originalDescription, pageAnalysis)
+      
+      // Enhance image generation prompt with page insights
+      if (productMetadata.imageGenerationPrompt) {
+        productMetadata.imageGenerationPrompt = enhancePromptWithPageAnalysis(
+          productMetadata.imageGenerationPrompt,
+          pageAnalysis,
+        )
+      }
+
+      // Store page analysis for reference
+      productMetadata.pageAnalysis = {
+        summary: pageAnalysis.summary,
+        designElements: pageAnalysis.designElements,
+        materials: pageAnalysis.materials,
+        keyFeatures: pageAnalysis.keyFeatures,
+      }
+
+      console.log("[v0] Product description enhanced with page analysis")
+    }
     console.log("[v0] - Camera Hint:", productMetadata.cameraHint)
     console.log("[v0] - Product Scale Category:", productMetadata.productScaleCategory)
     console.log("[v0] - Product Scale Ratio To Head:", productMetadata.productScaleRatioToHead)
@@ -241,6 +298,12 @@ REMEMBER: Analyze USER PHOTO (first image) for userCharacteristics, and PRODUCT 
       success: true,
       metadata: productMetadata,
       validation,
+      pageAnalysis: pageAnalysis
+        ? {
+            summary: pageAnalysis.summary,
+            enhancedDescription: pageAnalysis.enhancedDescription,
+          }
+        : null,
     })
   } catch (error) {
     console.error("[v0] Error analyzing product:", error)

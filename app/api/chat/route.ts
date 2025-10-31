@@ -1,5 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai"
 import { type NextRequest, NextResponse } from "next/server"
+import { smartFilterProducts } from "@/lib/product-filter"
+import type { Product } from "@/lib/closelook-types"
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "")
 
@@ -32,12 +34,58 @@ Key Guidelines:
 
 Remember: Your goal is to be a trusted advisor who helps customers feel confident in their purchase decisions.`
 
+// Detect if the query is asking for product filtering/search
+function isProductSearchQuery(message: string): boolean {
+  const searchKeywords = [
+    "show me",
+    "find",
+    "give me",
+    "looking for",
+    "search",
+    "filter",
+    "less than",
+    "under",
+    "below",
+    "more than",
+    "over",
+    "above",
+    "between",
+    "which",
+    "what",
+    "can you",
+    "i want",
+    "i need",
+  ]
+  const lowerMessage = message.toLowerCase()
+  return searchKeywords.some((keyword) => lowerMessage.includes(keyword))
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { message, conversationHistory, currentProduct, allProducts, pageContext } = await request.json()
 
     if (!message) {
       return NextResponse.json({ error: "Message is required" }, { status: 400 })
+    }
+
+    // Check if this is a product search/filter query
+    const isSearchQuery = isProductSearchQuery(message)
+    let filteredProducts: Product[] = []
+    let recommendations: any[] = []
+
+    // If it's a search query, filter products programmatically
+    if (isSearchQuery && allProducts && allProducts.length > 0) {
+      filteredProducts = smartFilterProducts(allProducts as Product[], message)
+
+      // If we found matching products, convert them to recommendations
+      if (filteredProducts.length > 0) {
+        recommendations = filteredProducts.slice(0, 10).map((product) => ({
+          id: product.id,
+          name: product.name,
+          price: product.price,
+          reason: `Matches your search criteria`,
+        }))
+      }
     }
 
     let contextMessage = ""
@@ -51,10 +99,33 @@ export async function POST(request: NextRequest) {
     }
 
     // Add available products for recommendations
-    if (allProducts && allProducts.length > 0) {
-      contextMessage += `\n\nAVAILABLE PRODUCTS FOR RECOMMENDATIONS:\n${allProducts
-        .map((p: any) => `- ID: ${p.id}, Name: ${p.name}, Category: ${p.category}, Type: ${p.type}, Price: $${p.price}`)
-        .join("\n")}\n`
+    // If we have filtered products, prioritize those; otherwise use all products
+    const productsToShow = filteredProducts.length > 0 ? filteredProducts : (allProducts || [])
+    
+    if (productsToShow.length > 0) {
+      if (filteredProducts.length > 0) {
+        contextMessage += `\n\nFILTERED PRODUCTS (matching the customer's search criteria):\n${filteredProducts
+          .map((p: any) => {
+            const sizeInfo = p.sizes && p.sizes.length > 0 ? `, Available Sizes: ${p.sizes.join(", ")}` : ""
+            return `- ID: ${p.id}, Name: ${p.name}, Category: ${p.category}, Type: ${p.type}, Color: ${p.color}, Price: $${p.price}${sizeInfo}`
+          })
+          .join("\n")}\n`
+      } else {
+        contextMessage += `\n\nAVAILABLE PRODUCTS FOR RECOMMENDATIONS:\n${productsToShow
+          .map((p: any) => {
+            const sizeInfo = p.sizes && p.sizes.length > 0 ? `, Available Sizes: ${p.sizes.join(", ")}` : ""
+            return `- ID: ${p.id}, Name: ${p.name}, Category: ${p.category}, Type: ${p.type}, Color: ${p.color}, Price: $${p.price}${sizeInfo}`
+          })
+          .join("\n")}\n`
+      }
+    }
+
+    // Update system prompt for search queries
+    let systemPrompt = SYSTEM_PROMPT
+    if (isSearchQuery && filteredProducts.length > 0) {
+      systemPrompt += `\n\nIMPORTANT: The customer asked for products matching specific criteria. ${filteredProducts.length} product(s) were found matching their query. When responding, mention the filtered products and use the PRODUCT_RECOMMENDATION format for each matching product.`
+    } else if (isSearchQuery && filteredProducts.length === 0) {
+      systemPrompt += `\n\nIMPORTANT: The customer asked for products matching specific criteria, but no products were found matching their exact query. Politely inform them that no products match their criteria, but suggest similar products or ask if they'd like to adjust their search.`
     }
 
     // Build conversation history
@@ -62,7 +133,7 @@ export async function POST(request: NextRequest) {
     const messages = [
       {
         role: "user",
-        parts: [{ text: SYSTEM_PROMPT + contextMessage }],
+        parts: [{ text: systemPrompt + contextMessage }],
       },
       {
         role: "model",
@@ -92,16 +163,20 @@ export async function POST(request: NextRequest) {
     const response = result.response
     const text = response.text()
 
-    // Parse product recommendations from the response
-    const recommendations: any[] = []
+    // Parse product recommendations from the LLM response
+    // If we already have filtered recommendations, merge them; otherwise use LLM recommendations
     const productRegex = /PRODUCT_RECOMMENDATION:\s*({[^}]+})/g
     let match
     let cleanedText = text
+    const llmRecommendations: any[] = []
 
     while ((match = productRegex.exec(text)) !== null) {
       try {
         const productData = JSON.parse(match[1])
-        recommendations.push(productData)
+        // Verify the product exists in our catalog
+        if (allProducts?.some((p: any) => p.id === productData.id)) {
+          llmRecommendations.push(productData)
+        }
         // Remove the recommendation marker from the text
         cleanedText = cleanedText.replace(match[0], "")
       } catch (e) {
@@ -109,9 +184,16 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // If we have filtered products from search query, prioritize them
+    // Otherwise use LLM recommendations
+    const finalRecommendations =
+      isSearchQuery && recommendations.length > 0
+        ? recommendations // Use programmatically filtered products
+        : llmRecommendations // Use LLM recommendations
+
     return NextResponse.json({
       message: cleanedText.trim(),
-      recommendations,
+      recommendations: finalRecommendations,
     })
   } catch (error: any) {
     console.error("Chat API Error:", error)

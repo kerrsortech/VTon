@@ -2,7 +2,7 @@ import { GoogleGenAI } from "@google/genai"
 import { type NextRequest, NextResponse } from "next/server"
 
 async function convertImageToSupportedFormat(file: File): Promise<{ buffer: Buffer; mimeType: string }> {
-  const supportedTypes = ["image/png", "image/jpeg", "image/webp"]
+  const supportedTypes = ["image/png", "image/jpeg", "image/webp", "image/avif"]
 
   if (supportedTypes.includes(file.type)) {
     const buffer = Buffer.from(await file.arrayBuffer())

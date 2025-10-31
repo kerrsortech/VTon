@@ -116,6 +116,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
                 color: currentProduct.color,
                 price: currentProduct.price,
                 description: currentProduct.description,
+                sizes: currentProduct.sizes,
               }
             : undefined,
           allProducts: demoProducts.map((p) => ({
@@ -123,7 +124,9 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
             name: p.name,
             category: p.category,
             type: p.type,
+            color: p.color,
             price: p.price,
+            sizes: p.sizes,
           })),
         }),
       })

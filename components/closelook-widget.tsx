@@ -67,6 +67,14 @@ export function CloselookWidget({ product, onTryOnComplete, className }: Closelo
       formData.append("productType", product.type)
       formData.append("productColor", product.color)
 
+      // Send product page URL if available (for enhanced product analysis)
+      // This allows Gemini to analyze the full product page for better understanding
+      if (product.url || (typeof window !== "undefined" && window.location.href)) {
+        const productUrl = product.url || window.location.href
+        formData.append("productUrl", productUrl)
+        console.log("[CloselookWidget] Product URL provided:", productUrl)
+      }
+
       const response = await fetch("/api/try-on", {
         method: "POST",
         body: formData,

@@ -1,76 +1,37 @@
 import Replicate from "replicate"
 import { put } from "@vercel/blob"
 import { type NextRequest, NextResponse } from "next/server"
-import { detectBodyAvailability, fillPromptPlaceholders } from "@/lib/prompt-helpers"
-
-const SEEDREAM_PROMPT_TEMPLATE = `REFERENCE IMAGES:
-- User image: {{USER_IMAGE_URL}} — preserve identity, face, hair, and skin tone.
-- Product images: {{PRODUCT_IMAGE_URLS}} — use to reproduce colors, textures, logos, hardware, and scale.
-
-GOAL:
-Create a single photorealistic studio photograph of the same person wearing/using the product. Preserve user identity, facial features, and skin tone exactly.
-
-MANDATORY FIDELITY RULES:
-1) Face & identity preservation:
-   - Preserve exact facial features, bone structure, hairline, facial hair, and skin tone from the user image. Do not alter face shape or facial hair.
-2) Product fidelity:
-   - Reproduce product color, texture, and hardware exactly from product images. Keep logos readable and at correct location/scale.
-3) No duplicate people, no overlapping big foreground crops, and no partial floating limbs.
-4) Scale & anatomical constraints:
-   - Person must have realistic adult proportions (approx. 7–8 head heights). Legs must not be child-like or truncated. If reconstructing body, use standard adult proportions based on face-to-body ratio.
-
-IDENTITY & POSE:
-Extracted user characteristics: {{USER_CHARACTERISTICS_JSON}}. Preserve these identity attributes exactly: face shape, facial hair, hairline, eye shape, and skin tone. Do NOT alter these.
-
-Pose & framing (MANDATORY):
-- forcePoseChange is true. Ignore the user's original camera angle and pose. Use Gemini's targetFraming ({{TARGET_FRAMING}}) to pick framing:
-  • "full-body": full-body, neutral standing pose facing camera, feet visible (use for shoes/pants).
-  • "three-quarter": three-quarter body or 3/4 turn, neutral posture (use for bags/jackets).
-  • "upper-body"/"mid-shot": chest-up to waist, neutral pose (use for watches, necklaces).
-  • "head-and-shoulders": tight face + eyewear focus (use for sunglasses, glasses, earrings).
-- When reconstructing full-body from head-only: build a realistic adult body using neutral fitted clothing (hoodie + tapered pants) with ~7–8 head heights and natural proportions.
-- ALWAYS replace background with studio: neutral light-gray gradient (#e6e6e6 center), softbox key + soft fill + subtle rim light.
-
-SCALE CONSTRAINT (MANDATORY):
-- Match product size to the provided productScaleCategory and productScaleRatioToHead. Target product width ≈ {{PRODUCT_SCALE_RATIO}} × user's head width (use face width from user image). Do not exceed +/- 20% of this target. If product would be larger than real-life proportions, reduce camera focal length or zoom out to keep realistic scale.
-
-CLOTHING-SWAP RULES:
- - If product is a garment (top/bottom/jacket), replace the corresponding user garment realistically with the product; preserve body shape and skin exposure.
- - If accessory (shoes/watch/sunglasses), keep user's clothing as-is; only add the accessory.
-
-PHOTOGRAPHY SPECIFICATIONS:
- - Camera hint (apply exactly): {{CAMERA_HINT}}. Ensure entire product is visible with ~12% padding.
- - Studio background: {{BACKGROUND_INSTRUCTION}}
- - Lighting: softbox key + soft fill, gentle rim light to separate subject from background.
- - Lens: 50–85mm equivalent. Depth of field: slight background blur but both face and product in acceptable focus.
- - Output look: Photorealistic, natural skin texture (no plastic smoothing), high-resolution.
- - Logo placement rule: NEVER add logos or text onto reflective surfaces (lenses, shiny metal) unless the product reference clearly shows the logo at that exact location. If the product reference does not show a logo on a reflective surface, do NOT render one.
-
-NEGATIVE PROMPT (MANDATORY):
-{{NEGATIVE_PROMPT}}
-
-GENERATOR CONTROL & QUALITY:
- - Use deterministic seed for reproducibility (optional per request).
- - Use strong guidance scale / high fidelity (engine-specific: high guidance / low denoising).
- - Generate 1–3 variations and select the most anatomically consistent; if face is modified or duplicates appear, automatically retry with higher guidance and different seed.
-
-OUTPUT:
- - Return a single image URL (or base64). Output must be high-resolution and photorealistic.
-
-PRODUCT CATEGORY: {{PRODUCT_CATEGORY}}
-PRODUCT SCALE CATEGORY: {{PRODUCT_SCALE_CATEGORY}}
-
-PRODUCT DETAILS:
-{{PRODUCT_DESCRIPTION}}
-
-IMAGE GENERATION INSTRUCTIONS FROM ANALYSIS:
-{{GEN_IMAGE_INSTRUCTIONS}}
-
-POSITIVE PROMPT:
-{{POSITIVE_PROMPT}}`
+import { detectBodyAvailabilitySync } from "@/lib/prompt-helpers"
+import {
+  mapCategoryToType,
+  getCategoryConfig,
+  requiresBodyReconstruction,
+  getStudioBackground,
+  getCategoryNegativePrompt,
+} from "@/lib/category-system"
+import { buildCategoryPrompt } from "@/lib/category-prompts"
+import {
+  validateUserPhoto,
+  validateProductImages,
+  validateProductMetadata,
+  validateGeneratedImageUrl,
+  sanitizeCategory,
+  sanitizeDescription,
+} from "@/lib/production-validators"
+import {
+  enhancePromptForProduction,
+  enhanceBodyReconstructionInstructions,
+  enhanceProductMetadata,
+  validatePromptQuality,
+} from "@/lib/production-enhancements"
 
 export async function POST(request: NextRequest) {
+  const startTime = Date.now()
+  let requestId = `req-${Date.now()}-${Math.random().toString(36).substring(7)}`
+
   try {
+    console.log(`[${requestId}] Try-on request started`)
+
     const formData = await request.formData()
     const userPhoto = formData.get("userPhoto") as File
     const productImageCount = Number.parseInt(formData.get("productImageCount") as string) || 1
@@ -85,26 +46,78 @@ export async function POST(request: NextRequest) {
 
     const productName = formData.get("productName") as string
     const productCategory = formData.get("productCategory") as string
+    const productUrl = formData.get("productUrl") as string | null
 
+    // Input validation
     if (!userPhoto || productImages.length === 0 || !productName) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
+      console.log(`[${requestId}] Validation failed: Missing required fields`)
+      return NextResponse.json(
+        {
+          error: "Missing required fields",
+          details: "User photo, product images, and product name are required",
+        },
+        { status: 400 },
+      )
     }
 
-    console.log("[v0] Try-on request received for:", productName)
-    console.log("[v0] Number of product images:", productImages.length)
+    // Validate user photo
+    const userPhotoValidation = validateUserPhoto(userPhoto)
+    if (!userPhotoValidation.isValid) {
+      console.log(`[${requestId}] User photo validation failed:`, userPhotoValidation.errors)
+      return NextResponse.json(
+        {
+          error: "Invalid user photo",
+          details: userPhotoValidation.errors.join("; "),
+          warnings: userPhotoValidation.warnings,
+        },
+        { status: 400 },
+      )
+    }
+
+    // Validate product images
+    const productImagesValidation = validateProductImages(productImages)
+    if (!productImagesValidation.isValid) {
+      console.log(`[${requestId}] Product images validation failed:`, productImagesValidation.errors)
+      return NextResponse.json(
+        {
+          error: "Invalid product images",
+          details: productImagesValidation.errors.join("; "),
+          warnings: productImagesValidation.warnings,
+        },
+        { status: 400 },
+      )
+    }
+
+    console.log(`[${requestId}] Try-on request received for:`, productName)
+    console.log(`[${requestId}] Number of product images:`, productImages.length)
+    if (userPhotoValidation.warnings.length > 0) {
+      console.log(`[${requestId}] User photo warnings:`, userPhotoValidation.warnings)
+    }
+    if (productImagesValidation.warnings.length > 0) {
+      console.log(`[${requestId}] Product images warnings:`, productImagesValidation.warnings)
+    }
 
     const apiKey = process.env.REPLICATE_API_TOKEN
     if (!apiKey) {
       return NextResponse.json({ error: "Replicate API token not configured" }, { status: 500 })
     }
 
-    const userBodyAvailability = detectBodyAvailability(userPhoto)
-    console.log("[v0] Detected body availability:", userBodyAvailability)
+    // Detect body availability (using sync version for now - can be enhanced with async later)
+    const userBodyAvailability = detectBodyAvailabilitySync(userPhoto)
+    console.log(`[${requestId}] Detected body availability:`, userBodyAvailability)
 
-    console.log("[v0] Analyzing product with Gemini (sending user photo + product image)...")
+    console.log(`[${requestId}] Analyzing product with Gemini (sending user photo + product image)...`)
     const productAnalysisFormData = new FormData()
     productAnalysisFormData.append("userPhoto", userPhoto)
     productAnalysisFormData.append("productImage", productImages[0])
+    
+    // Add product URL for enhanced page analysis (if available)
+    // This allows Gemini to analyze the full product page for better understanding
+    if (productUrl && productUrl.trim().length > 0 && productUrl.startsWith("http")) {
+      productAnalysisFormData.append("productUrl", productUrl)
+      console.log(`[${requestId}] Product URL provided for page analysis:`, productUrl)
+    }
+    
     const analysisResponse = await fetch(`${request.nextUrl.origin}/api/analyze-product`, {
       method: "POST",
       body: productAnalysisFormData,
@@ -116,19 +129,40 @@ export async function POST(request: NextRequest) {
     if (analysisResponse.ok) {
       const analysisData = await analysisResponse.json()
       productMetadata = analysisData.metadata
-      console.log("[v0] Product analysis successful")
+      console.log(`[${requestId}] Product analysis successful`)
+
+      // Check if page analysis was performed
+      if (analysisData.pageAnalysis) {
+        console.log(`[${requestId}] Product page analysis was used`)
+        console.log(`[${requestId}] Page analysis summary:`, analysisData.pageAnalysis.summary?.substring(0, 100))
+      }
+
+      // Validate product metadata
+      const metadataValidation = validateProductMetadata(productMetadata)
+      if (metadataValidation.warnings.length > 0) {
+        console.log(`[${requestId}] Product metadata warnings:`, metadataValidation.warnings)
+      }
 
       if (analysisData.validation?.hasUnknownValues || analysisData.validation?.promptLength < 100) {
-        console.log("[v0] Warning: Low quality analysis detected, using fallback")
+        console.log(`[${requestId}] Warning: Low quality analysis detected, using fallback`)
         usedFallback = true
       }
+
+      // Sanitize metadata early (category config will be added later)
+      productMetadata.productCategory = sanitizeCategory(productMetadata.productCategory || productCategory || "Fashion Accessory")
+      productMetadata.detailedVisualDescription = sanitizeDescription(
+        productMetadata.detailedVisualDescription || `${productName} - A stylish product with premium design.`,
+      )
     } else {
-      console.log("[v0] Product analysis failed, using fallback")
+      console.log(`[${requestId}] Product analysis failed, using fallback`)
       usedFallback = true
+      const fallbackCategory = sanitizeCategory(productCategory || "Fashion Accessory")
       productMetadata = {
-        productCategory: productCategory || "Fashion Accessory",
-        detailedVisualDescription: `${productName} - A stylish ${productCategory || "product"} with premium design and quality materials.`,
-        imageGenerationPrompt: `Show the person wearing the ${productName} in a natural, confident pose. Position the product prominently so it's clearly visible. Use professional studio lighting and a clean background.`,
+        productCategory: fallbackCategory,
+        detailedVisualDescription: sanitizeDescription(
+          `${productName} - A stylish ${fallbackCategory} with premium design and quality materials.`,
+        ),
+        imageGenerationPrompt: `Show the person wearing the ${fallbackCategory} in a natural, confident pose. Position the product prominently so it's clearly visible. Use professional studio lighting and a clean background.`,
         cameraHint: "Unknown",
         productScaleCategory: "Unknown",
         productScaleRatioToHead: 1.0,
@@ -140,7 +174,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    console.log("[v0] Uploading images to Blob storage...")
+    console.log(`[${requestId}] Uploading images to Blob storage...`)
     const userPhotoBlob = await put(`try-on/user-${Date.now()}-${userPhoto.name}`, userPhoto, {
       access: "public",
     })
@@ -152,115 +186,133 @@ export async function POST(request: NextRequest) {
         }),
       ),
     )
-    console.log("[v0] Images uploaded successfully")
-    console.log("[v0] Product image URLs:", productImageBlobs.map((b) => b.url).join(", "))
+    console.log(`[${requestId}] Images uploaded successfully`)
+    console.log(`[${requestId}] Product image URLs:`, productImageBlobs.map((b) => b.url).join(", "))
 
-    const defaultCameraHints: Record<string, string> = {
-      Sunglasses: "85mm headshot, tight head-and-shoulders; include ~12% padding",
-      Shoes: "50mm full-body, feet visible, include ~12% padding",
-      Bag: "50-85mm 3/4 or full-body depending on bag size; ensure full bag visible with ~12% padding",
-      Watch: "85mm mid-shot; show wrist and watch clearly; include ~12% padding",
-      Default: "50mm neutral framing; ensure full product visible with ~12% padding",
-    }
+    // Map detected category to our standardized category type
+    const detectedCategory = productMetadata.productCategory || productCategory || "Unknown"
+    const categoryType = mapCategoryToType(detectedCategory)
+    const categoryConfig = getCategoryConfig(categoryType, detectedCategory)
 
-    const defaultScaleRatio: Record<string, number> = {
-      Sunglasses: 1.2,
-      Shoes: 0.9,
-      Bag: 0.8,
-      Watch: 0.25,
-      Default: 1.0,
-    }
+    // Enhance metadata with category config now that it's available
+    productMetadata = enhanceProductMetadata(productMetadata, productName, productCategory, categoryConfig)
 
+    console.log(`[${requestId}] Detected category:`, detectedCategory)
+    console.log(`[${requestId}] Mapped to category type:`, categoryType)
+    console.log(`[${requestId}] Category config:`, JSON.stringify(categoryConfig, null, 2))
+
+    // Determine if body reconstruction is needed
+    const needsBodyReconstruction = requiresBodyReconstruction(categoryType, userBodyAvailability)
+    console.log(`[${requestId}] Body reconstruction needed:`, needsBodyReconstruction)
+
+    // Use category-specific config with fallback to Gemini analysis
     const cameraHint =
       productMetadata.cameraHint && productMetadata.cameraHint !== "Unknown"
         ? productMetadata.cameraHint
-        : defaultCameraHints[productMetadata.productCategory] || defaultCameraHints["Default"]
+        : categoryConfig.cameraHint
 
     const productScaleRatio =
       productMetadata.productScaleRatioToHead && productMetadata.productScaleRatioToHead !== 1.0
         ? productMetadata.productScaleRatioToHead
-        : defaultScaleRatio[productMetadata.productCategory] || defaultScaleRatio["Default"]
+        : categoryConfig.productScaleRatioToHead
 
     const productScaleCategory =
       productMetadata.productScaleCategory && productMetadata.productScaleCategory !== "Unknown"
         ? productMetadata.productScaleCategory
-        : "medium"
-
-    console.log("[v0] Using camera hint:", cameraHint)
-    console.log("[v0] Using product scale ratio:", productScaleRatio)
-    console.log("[v0] Using product scale category:", productScaleCategory)
-
-    const framingDefault: Record<string, string> = {
-      Sunglasses: "head-and-shoulders",
-      Earrings: "head-and-shoulders",
-      Necklace: "mid-shot",
-      Watch: "mid-shot",
-      Shoes: "full-body",
-      Pants: "full-body",
-      Dress: "three-quarter",
-      Jacket: "three-quarter",
-      Bag: "three-quarter",
-      Default: "three-quarter",
-    }
+        : categoryConfig.productScaleCategory
 
     const targetFramingToUse =
       productMetadata.targetFraming && productMetadata.targetFraming !== "Unknown"
         ? productMetadata.targetFraming
-        : framingDefault[productMetadata.productCategory] || framingDefault["Default"]
-
-    console.log("[v0] Using target framing:", targetFramingToUse)
+        : categoryConfig.targetFraming
 
     const backgroundInstruction =
       productMetadata.backgroundInstruction && productMetadata.backgroundInstruction !== "Unknown"
         ? productMetadata.backgroundInstruction
-        : "neutral light-gray gradient (#e6e6e6 center), softbox key + soft fill + subtle rim light"
+        : getStudioBackground(categoryConfig)
 
     const positivePrompt =
       productMetadata.positivePrompt && productMetadata.positivePrompt !== "Unknown"
         ? productMetadata.positivePrompt
-        : "photorealistic, high-resolution, professional studio lighting, sharp focus"
+        : "photorealistic, high-resolution, professional studio lighting, sharp focus, natural skin texture, commercial product photography"
 
     const negativePrompt =
       productMetadata.negativePrompt && productMetadata.negativePrompt !== "Unknown"
         ? productMetadata.negativePrompt
-        : "no duplicate person, no extra limbs, no multiple heads, no floating body parts, no giant foreground product overlay, no logos on lenses unless shown exactly in product refs, no child-like proportions, no cartoon, no text, no watermark, no home interiors"
+        : getCategoryNegativePrompt(categoryType)
+
+    console.log(`[${requestId}] Using camera hint:`, cameraHint)
+    console.log(`[${requestId}] Using product scale ratio:`, productScaleRatio)
+    console.log(`[${requestId}] Using product scale category:`, productScaleCategory)
+    console.log(`[${requestId}] Using target framing:`, targetFramingToUse)
+    console.log(`[${requestId}] Using background instruction:`, backgroundInstruction)
 
     const userCharacteristicsJson =
       productMetadata.userCharacteristics && typeof productMetadata.userCharacteristics === "object"
         ? JSON.stringify(productMetadata.userCharacteristics)
         : '{"visibility":"Unknown","genderHint":"unknown"}'
 
-    console.log("[v0] Using background instruction:", backgroundInstruction)
-    console.log("[v0] Using positive prompt:", positivePrompt)
-    console.log("[v0] Using negative prompt:", negativePrompt)
-    console.log("[v0] Using user characteristics:", userCharacteristicsJson)
+    console.log(`[${requestId}] Using positive prompt:`, positivePrompt.substring(0, 100) + "...")
+    console.log(`[${requestId}] Using negative prompt:`, negativePrompt.substring(0, 100) + "...")
+    console.log(`[${requestId}] Using user characteristics:`, userCharacteristicsJson)
 
-    const prompt = fillPromptPlaceholders(SEEDREAM_PROMPT_TEMPLATE, {
+    // Build category-specific prompt
+    // Enhanced product description already includes page analysis if available
+    let prompt = buildCategoryPrompt(categoryConfig, {
       userImageUrl: userPhotoBlob.url,
       productImageUrls: productImageBlobs.map((b) => b.url).join(", "),
-      productCategory: productMetadata.productCategory,
-      productDescription: productMetadata.detailedVisualDescription,
-      genImageInstructions: productMetadata.imageGenerationPrompt,
-      userGenderHint: "Unknown",
-      userBodyAvailability: userBodyAvailability,
+      productCategory: detectedCategory,
+      productDescription: productMetadata.detailedVisualDescription || sanitizeDescription(`${productName} - a stylish ${detectedCategory}`),
+      genImageInstructions: productMetadata.imageGenerationPrompt || `Show the person wearing the ${detectedCategory} in a natural, confident pose. Position the product prominently so it's clearly visible. Use professional studio lighting and a clean background.`,
+      userCharacteristicsJson: userCharacteristicsJson,
       cameraHint: cameraHint,
       productScaleRatio: String(productScaleRatio),
       productScaleCategory: productScaleCategory,
-      userCharacteristicsJson: userCharacteristicsJson,
       targetFraming: targetFramingToUse,
       backgroundInstruction: backgroundInstruction,
       positivePrompt: positivePrompt,
       negativePrompt: negativePrompt,
     })
 
-    console.log("[v0] Generated prompt with placeholders filled")
+    // Add body reconstruction instructions if needed
+    if (needsBodyReconstruction) {
+      const bodyReconstructionInstructions = enhanceBodyReconstructionInstructions(
+        categoryConfig,
+        userBodyAvailability,
+        needsBodyReconstruction,
+      )
+      if (bodyReconstructionInstructions) {
+        prompt = bodyReconstructionInstructions + "\n\n" + prompt
+        console.log(`[${requestId}] Added body reconstruction instructions`)
+      }
+    }
+
+    // Enhance prompt for production quality
+    const { enhancedPrompt, warnings: promptWarnings } = enhancePromptForProduction(
+      prompt,
+      categoryConfig,
+      detectedCategory,
+    )
+    prompt = enhancedPrompt
+
+    // Validate prompt quality
+    const promptValidation = validatePromptQuality(prompt, categoryConfig)
+    if (promptValidation.errors.length > 0) {
+      console.error(`[${requestId}] Prompt validation errors:`, promptValidation.errors)
+    }
+    if (promptValidation.warnings.length > 0 || promptWarnings.length > 0) {
+      console.log(`[${requestId}] Prompt quality warnings:`, [...promptValidation.warnings, ...promptWarnings])
+    }
+
+    console.log(`[${requestId}] Generated category-specific prompt with placeholders filled`)
+    console.log(`[${requestId}] Prompt length:`, prompt.length)
 
     const replicate = new Replicate({ auth: apiKey })
 
     // The prompt still references all product URLs for context
     const imageInputArray = [userPhotoBlob.url, productImageBlobs[0].url]
-    console.log("[v0] Image input array length:", imageInputArray.length)
-    console.log("[v0] Sending to SeeDream-4: user photo + first product image")
+    console.log(`[${requestId}] Image input array length:`, imageInputArray.length)
+    console.log(`[${requestId}] Sending to SeeDream-4: user photo + first product image`)
 
     const input = {
       size: "2K",
@@ -273,27 +325,27 @@ export async function POST(request: NextRequest) {
       sequential_image_generation: "disabled",
     }
 
-    console.log("[v0] Calling Replicate SeeDream-4...")
+    console.log(`[${requestId}] Calling Replicate SeeDream-4...`)
 
     let output
     try {
       output = await replicate.run("bytedance/seedream-4", { input })
     } catch (replicateError) {
-      console.error("[v0] Replicate API error:", replicateError)
+      console.error(`[${requestId}] Replicate API error:`, replicateError)
       throw new Error(
         `Replicate API failed: ${replicateError instanceof Error ? replicateError.message : String(replicateError)}`,
       )
     }
 
-    console.log("[v0] Replicate output received")
-    console.log("[v0] Output type:", typeof output)
-    console.log("[v0] Output is array:", Array.isArray(output))
+    console.log(`[${requestId}] Replicate output received`)
+    console.log(`[${requestId}] Output type:`, typeof output)
+    console.log(`[${requestId}] Output is array:`, Array.isArray(output))
 
     let imageUrl: string | undefined
 
     if (Array.isArray(output) && output.length > 0) {
       const firstItem = output[0]
-      console.log("[v0] First item type:", typeof firstItem)
+      console.log(`[${requestId}] First item type:`, typeof firstItem)
 
       if (typeof firstItem === "string") {
         imageUrl = firstItem
@@ -313,10 +365,16 @@ export async function POST(request: NextRequest) {
       throw new Error("No output received from Replicate")
     }
 
-    console.log("[v0] Final image URL:", imageUrl)
+    console.log(`[${requestId}] Final image URL:`, imageUrl)
 
-    if (!imageUrl || typeof imageUrl !== "string" || !imageUrl.startsWith("http")) {
-      throw new Error(`Invalid image URL: ${imageUrl}`)
+    // Validate generated image URL
+    const imageUrlValidation = validateGeneratedImageUrl(imageUrl)
+    if (!imageUrlValidation.isValid) {
+      console.error(`[${requestId}] Generated image URL validation failed:`, imageUrlValidation.errors)
+      throw new Error(`Invalid generated image URL: ${imageUrlValidation.errors.join("; ")}`)
+    }
+    if (imageUrlValidation.warnings.length > 0) {
+      console.log(`[${requestId}] Image URL warnings:`, imageUrlValidation.warnings)
     }
 
     return NextResponse.json({
@@ -325,7 +383,20 @@ export async function POST(request: NextRequest) {
       metadata: {
         model: "bytedance/seedream-4",
         timestamp: new Date().toISOString(),
+        requestId,
+        processingTime: Date.now() - startTime,
         productAnalysis: productMetadata,
+        categorySystem: {
+          detectedCategory,
+          categoryType,
+          categoryConfig: {
+            type: categoryConfig.type,
+            targetFraming: categoryConfig.targetFraming,
+            cameraHint: categoryConfig.cameraHint,
+            requiresFullBody: categoryConfig.requiresFullBody,
+          },
+          needsBodyReconstruction,
+        },
         flags: {
           usedFallback,
           userBodyAvailability,
@@ -336,13 +407,40 @@ export async function POST(request: NextRequest) {
       },
     })
   } catch (error) {
-    console.error("[v0] Error:", error)
+    const errorDetails = error instanceof Error ? error.message : String(error)
+    console.error(`[${requestId}] Error:`, errorDetails)
+    console.error(`[${requestId}] Error stack:`, error instanceof Error ? error.stack : "No stack trace")
+
+    // Enhanced error handling
+    let statusCode = 500
+    let errorMessage = "Failed to generate try-on image"
+    let errorType = "UNKNOWN_ERROR"
+
+    if (errorDetails.includes("quota") || errorDetails.includes("429")) {
+      statusCode = 429
+      errorMessage = "API quota exceeded"
+      errorType = "QUOTA_EXCEEDED"
+    } else if (errorDetails.includes("timeout") || errorDetails.includes("TIMEOUT")) {
+      statusCode = 504
+      errorMessage = "Request timeout - image generation took too long"
+      errorType = "TIMEOUT"
+    } else if (errorDetails.includes("Invalid") || errorDetails.includes("validation")) {
+      statusCode = 400
+      errorMessage = errorDetails
+      errorType = "VALIDATION_ERROR"
+    } else if (errorDetails.includes("Replicate")) {
+      errorType = "REPLICATE_API_ERROR"
+    }
+
     return NextResponse.json(
       {
-        error: "Failed to generate try-on image",
-        details: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
+        details: errorDetails,
+        errorType,
+        requestId,
+        timestamp: new Date().toISOString(),
       },
-      { status: 500 },
+      { status: statusCode },
     )
   }
 }

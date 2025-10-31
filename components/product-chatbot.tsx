@@ -92,13 +92,16 @@ export function ProductChatbot({ currentProduct, allProducts, className }: Produ
             color: currentProduct.color,
             price: currentProduct.price,
             description: currentProduct.description,
+            sizes: currentProduct.sizes,
           },
           allProducts: allProducts.map((p) => ({
             id: p.id,
             name: p.name,
             category: p.category,
             type: p.type,
+            color: p.color,
             price: p.price,
+            sizes: p.sizes,
           })),
         }),
       })

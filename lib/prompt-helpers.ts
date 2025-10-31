@@ -1,10 +1,22 @@
 /**
- * Detects body availability from user photo
- * Simple heuristic based on image dimensions and aspect ratio
+ * Async version of body detection (for future use with image analysis APIs)
+ * Currently falls back to sync version for server-side compatibility
  */
-export function detectBodyAvailability(file: File): "full-body" | "upper-body" | "head-only" {
-  // For now, we'll use a simple heuristic based on file name or default to upper-body
-  // In production, you could use an image analysis API or ML model
+export async function detectBodyAvailability(
+  file: File,
+): Promise<"full-body" | "upper-body" | "head-only"> {
+  // Note: In a browser environment, you could use actual image analysis here
+  // For Node.js server environment, we use sync version
+  // In production, you could integrate an image analysis API (e.g., Google Vision, AWS Rekognition)
+  // For now, fall back to sync detection
+  return detectBodyAvailabilitySync(file)
+}
+
+/**
+ * Synchronous fallback for body availability detection
+ * Used when async detection isn't available
+ */
+export function detectBodyAvailabilitySync(file: File): "full-body" | "upper-body" | "head-only" {
   const fileName = file.name.toLowerCase()
 
   if (fileName.includes("full") || fileName.includes("body")) {
@@ -14,7 +26,6 @@ export function detectBodyAvailability(file: File): "full-body" | "upper-body" |
     return "head-only"
   }
 
-  // Default to upper-body as most selfies show upper body
   return "upper-body"
 }
 
