@@ -1,21 +1,20 @@
 # Closelook Virtual Try-On Plugin
 
-A revolutionary virtual try-on system powered by Google Gemini 2.5 Flash Image AI that creates photoreal images of customers wearing products.
+A revolutionary virtual try-on system powered by Replicate's SeeDream-4 AI that creates photoreal images of customers wearing products.
 
 ## Features
 
 - **Floating Upload Widget**: Easy-to-use widget that floats on product pages
-- **AI-Powered Try-On**: Generates photoreal images using Google Gemini AI
+- **AI-Powered Try-On**: Generates photoreal images using Replicate SeeDream-4
 - **Model/User Toggle**: Switch between model photos and personalized try-on results
 - **Download & Share**: Download try-on images and share on social media
-- **Demo Mode**: Test the UI without API calls when quota is exceeded
 - **Demo Store**: Complete e-commerce demo with 8 sample products
 
 ## Tech Stack
 
 - **Framework**: Next.js 15 with App Router
 - **UI**: Shadcn/ui + Tailwind CSS v4
-- **AI**: Google Gemini 2.5 Flash Image via @google/genai SDK
+- **AI**: Replicate SeeDream-4 via Replicate SDK
 - **Styling**: Tailwind CSS with custom design tokens
 
 ## Getting Started
@@ -28,13 +27,10 @@ A revolutionary virtual try-on system powered by Google Gemini 2.5 Flash Image A
 2. **Set up environment variables**:
    Create a `.env.local` file in the root directory:
    \`\`\`bash
-   GOOGLE_GEMINI_API_KEY=your_google_gemini_api_key_here
-   
-   # Optional: Enable demo mode to test UI without API calls
-   NEXT_PUBLIC_DEMO_MODE=false
+   REPLICATE_API_TOKEN=your_replicate_api_token_here
    \`\`\`
    
-   Get your API key from: https://aistudio.google.com/apikey
+   Get your API token from: https://replicate.com/account/api-tokens
 
 3. **Run the development server**:
    \`\`\`bash
@@ -50,6 +46,7 @@ A revolutionary virtual try-on system powered by Google Gemini 2.5 Flash Image A
 ├── app/
 │   ├── api/
 │   │   ├── try-on/          # Main try-on generation endpoint
+│   │   ├── analyze-product/ # Product analysis endpoint
 │   │   └── generate-image/  # Generic image generation endpoint
 │   ├── product/[id]/        # Product detail pages
 │   └── page.tsx             # Homepage with product grid
@@ -57,10 +54,14 @@ A revolutionary virtual try-on system powered by Google Gemini 2.5 Flash Image A
 │   ├── closelook-widget.tsx      # Floating upload widget
 │   ├── closelook-provider.tsx    # Context provider for state
 │   ├── product-view.tsx          # Product page with try-on
+│   ├── product-chatbot.tsx       # AI shopping assistant
 │   ├── try-on-actions.tsx        # Download/share functionality
 │   └── ui/                       # Shadcn UI components
 └── lib/
-    ├── closelook-types.ts        # TypeScript types
+    ├── closelook-plugin/         # Plugin architecture
+    │   ├── adapters/             # Platform adapters (Shopify, WooCommerce, etc.)
+    │   ├── types/                # TypeScript types
+    │   └── config.ts             # Plugin configuration
     └── demo-products.ts          # Sample product data
 \`\`\`
 
@@ -68,28 +69,48 @@ A revolutionary virtual try-on system powered by Google Gemini 2.5 Flash Image A
 
 ### POST /api/try-on
 
-Generates a photoreal try-on image using Google Gemini API.
+Generates a photoreal try-on image using Replicate SeeDream-4 API.
 
 **Request (FormData)**:
 - `userPhoto`: File - User's photo
 - `productImage`: File - Product image
 - `productName`: string - Product name
 - `productCategory`: string - Product category
-- `productType`: string - Product type
-- `productColor`: string - Product color
 
 **Response**:
 \`\`\`json
 {
-  "imageUrl": "data:image/png;base64,...",
+  "imageUrl": "https://replicate.delivery/...",
   "productName": "Nike ZoomX Vomero Plus",
-  "metadata": { "model": "gemini-2.5-flash-image", "timestamp": "..." }
+  "metadata": { 
+    "model": "bytedance/seedream-4", 
+    "timestamp": "...",
+    "productAnalysis": { ... }
+  }
+}
+\`\`\`
+
+### POST /api/analyze-product
+
+Analyzes product images to extract category and description using Replicate's vision models.
+
+**Request (FormData)**:
+- `productImage`: File - Product image to analyze
+
+**Response**:
+\`\`\`json
+{
+  "success": true,
+  "metadata": {
+    "productCategory": "Running Shoes",
+    "shortDescription": "White and blue athletic running shoes..."
+  }
 }
 \`\`\`
 
 ### POST /api/generate-image
 
-Generic image generation with custom prompts using Google Gemini API.
+Generic image generation with custom prompts using Replicate SeeDream-4.
 
 **Request (FormData)**:
 - `image1`: File - First input image
@@ -99,8 +120,8 @@ Generic image generation with custom prompts using Google Gemini API.
 **Response**:
 \`\`\`json
 {
-  "imageUrl": "data:image/png;base64,...",
-  "metadata": { "model": "gemini-2.5-flash-image", "timestamp": "..." }
+  "imageUrl": "https://replicate.delivery/...",
+  "metadata": { "model": "bytedance/seedream-4", "timestamp": "..." }
 }
 \`\`\`
 
@@ -150,25 +171,33 @@ function MyComponent() {
 }
 \`\`\`
 
-## Demo Mode
+## Plugin Architecture
 
-If you encounter API quota limits or want to test the UI without making real API calls, enable **Demo Mode**:
+Closelook is built with a modular plugin architecture that supports multiple e-commerce platforms:
 
-1. Set the environment variable:
-   \`\`\`bash
-   NEXT_PUBLIC_DEMO_MODE=true
-   \`\`\`
+### Supported Platforms
+- **Demo Mode**: Static product data (current implementation)
+- **Shopify**: Coming soon
+- **WooCommerce**: Coming soon
+- **Custom**: Extensible adapter system
 
-2. In demo mode:
-   - No API calls are made to Google Gemini
-   - The uploaded user photo is returned as a placeholder
-   - All UI flows work normally for testing and demonstration
-   - A blue info banner indicates demo mode is active
+### Creating Custom Adapters
 
-This is useful for:
-- Testing the UI when API quota is exceeded
-- Demonstrating the plugin to stakeholders
-- Development without consuming API credits
+\`\`\`typescript
+import { ProductAdapter } from "@/lib/closelook-plugin/adapters/base-adapter"
+
+class MyPlatformAdapter extends ProductAdapter {
+  async getProduct(id: string) {
+    // Fetch from your platform
+  }
+  
+  async getAllProducts() {
+    // Fetch all products
+  }
+}
+\`\`\`
+
+See `lib/closelook-plugin/README.md` for detailed integration guides.
 
 ## Deployment
 
@@ -176,20 +205,18 @@ This is useful for:
 
 1. Push your code to GitHub
 2. Import your repository in Vercel
-3. Add the environment variables in Vercel dashboard:
-   - `GOOGLE_GEMINI_API_KEY`: Your Google Gemini API key
-   - `NEXT_PUBLIC_DEMO_MODE`: Set to `true` for demo mode (optional)
+3. Add the environment variable in Vercel dashboard:
+   - `REPLICATE_API_TOKEN`: Your Replicate API token
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new)
 
 ### Environment Variables
 
-The app supports the following environment variables:
+The app requires the following environment variable:
 
-- `GOOGLE_GEMINI_API_KEY` (required): Your Google Gemini API key from https://aistudio.google.com/apikey
-- `NEXT_PUBLIC_DEMO_MODE` (optional): Set to `true` to enable demo mode without API calls
+- `REPLICATE_API_TOKEN` (required): Your Replicate API token from https://replicate.com/account/api-tokens
 
-You can add these in the Vercel dashboard under Settings > Environment Variables, or in the v0 Vars section of the in-chat sidebar.
+You can add this in the Vercel dashboard under Settings > Environment Variables, or in the v0 Vars section of the in-chat sidebar.
 
 ## Customization
 
@@ -212,7 +239,7 @@ Edit `lib/demo-products.ts` to add or modify products:
 
 ### Customizing Prompts
 
-Modify the `generateCloselookPrompt` function in `app/api/try-on/route.ts` to adjust AI generation behavior.
+Modify the `buildDynamicTryOnPrompt` function in `app/api/try-on/route.ts` to adjust AI generation behavior.
 
 ### Styling
 

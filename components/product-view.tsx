@@ -7,12 +7,11 @@ import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { CloselookWidget } from "@/components/closelook-widget"
-import { ProductChatbot } from "@/components/product-chatbot"
+import { GlobalChatbot } from "@/components/global-chatbot"
 import { TryOnActions } from "@/components/try-on-actions"
 import { useCloselook } from "@/components/closelook-provider"
 import type { Product, TryOnResult } from "@/lib/closelook-types"
 import { ChevronLeft, Heart, ShoppingBag, User } from "lucide-react"
-import { demoProducts } from "@/lib/demo-products"
 
 interface ProductViewProps {
   product: Product
@@ -216,7 +215,7 @@ export function ProductView({ product }: ProductViewProps) {
         </div>
       </div>
 
-      <ProductChatbot currentProduct={product} allProducts={demoProducts} />
+      <GlobalChatbot />
       <CloselookWidget product={product} onTryOnComplete={handleTryOnComplete} />
     </div>
   )

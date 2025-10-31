@@ -49,10 +49,18 @@ export function CloselookWidget({ product, onTryOnComplete, className }: Closelo
       const formData = new FormData()
       formData.append("userPhoto", file)
 
-      const productImageResponse = await fetch(product.images[0])
-      const productImageBlob = await productImageResponse.blob()
-      const productImageFile = new File([productImageBlob], "product.jpg", { type: productImageBlob.type })
-      formData.append("productImage", productImageFile)
+      const maxProductImages = 3
+      const productImagesToSend = product.images.slice(0, maxProductImages)
+
+      for (let i = 0; i < productImagesToSend.length; i++) {
+        const productImageResponse = await fetch(productImagesToSend[i])
+        const productImageBlob = await productImageResponse.blob()
+        const productImageFile = new File([productImageBlob], `product-${i}.jpg`, { type: productImageBlob.type })
+        formData.append(`productImage${i}`, productImageFile)
+      }
+
+      // Send the count of product images
+      formData.append("productImageCount", String(productImagesToSend.length))
 
       formData.append("productName", product.name)
       formData.append("productCategory", product.category)

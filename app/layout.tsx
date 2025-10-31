@@ -7,6 +7,7 @@ import { CloselookProvider } from "@/components/closelook-provider"
 import { Toaster } from "@/components/ui/toaster"
 import "./globals.css"
 import { Suspense } from "react"
+import { ChatbotWrapper } from "@/components/chatbot-wrapper"
 
 export const metadata: Metadata = {
   title: "Closelook Demo Store - Virtual Try-On",
@@ -26,6 +27,7 @@ export default function RootLayout({
           <CloselookProvider>
             {children}
             <Toaster />
+            <ChatbotWrapper />
           </CloselookProvider>
         </Suspense>
         <Analytics />

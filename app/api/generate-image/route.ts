@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
     const ai = new GoogleGenAI({ apiKey })
 
     const model = ai.models.get({
-      model: "gemini-2.0-flash-preview-image-generation",
+      model: "gemini-2.5-flash-image",
       generationConfig: {
         responseModalities: ["Image", "Text"],
       },
