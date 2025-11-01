@@ -1,0 +1,30 @@
+{
+  "name": "Closelook Try-On Widget",
+  "targets": ["product"],
+  "settings": [
+    {
+      "type": "select",
+      "id": "position",
+      "label": "Widget Position",
+      "options": [
+        {
+          "value": "bottom-right",
+          "label": "Bottom Right"
+        },
+        {
+          "value": "bottom-left",
+          "label": "Bottom Left"
+        }
+      ],
+      "default": "bottom-right"
+    },
+    {
+      "type": "text",
+      "id": "api_url",
+      "label": "API URL",
+      "info": "Your Closelook backend API URL (e.g., https://your-app.onrender.com/api)",
+      "default": "https://your-app.onrender.com/api"
+    }
+  ]
+}
+

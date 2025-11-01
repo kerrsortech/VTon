@@ -1,0 +1,61 @@
+{% comment %}
+  Closelook Try-On Widget Block
+  Adds virtual try-on widget to product pages
+{% endcomment %}
+
+<div
+  id="closelook-try-on-widget"
+  data-shop-domain="{{ shop.domain }}"
+  data-product-id="{{ product.id }}"
+  data-product-handle="{{ product.handle }}"
+  data-widget-position="{{ block.settings.position }}"
+  data-api-url="{{ block.settings.api_url | default: 'https://your-app.onrender.com/api' }}"
+  style="position: {{ block.settings.position == 'bottom-right' ? 'fixed' : 'relative' }}; bottom: 24px; right: 24px; z-index: 9999;"
+>
+  {% comment %} Widget will be injected here {% endcomment %}
+</div>
+
+<script>
+  (function() {
+    const widgetContainer = document.getElementById('closelook-try-on-widget');
+    if (!widgetContainer) return;
+
+    // Extract product data from Shopify global object or DOM
+    const shopifyProduct = window.Shopify?.product || {
+      id: widgetContainer.dataset.productId,
+      handle: widgetContainer.dataset.productHandle,
+      title: document.querySelector('h1.product-title')?.textContent || '{{ product.title }}',
+      description: '{{ product.description | strip_html | truncate: 200 }}',
+      images: Array.from(document.querySelectorAll('.product-images img, .product-photos img')).map(img => img.src || img.dataset.src || img.getAttribute('srcset')?.split(',')[0]?.trim().split(' ')[0]),
+      variants: [{
+        price: {{ product.selected_or_first_available_variant.price | money_without_currency | remove: ',' }},
+        title: '{{ product.selected_or_first_available_variant.title }}'
+      }],
+      product_type: '{{ product.type }}',
+      tags: {{ product.tags | json }},
+      vendor: '{{ product.vendor }}'
+    };
+
+    // Load widget bundle from CDN or Render
+    const apiUrl = widgetContainer.dataset.apiUrl || 'https://your-app.onrender.com/api';
+    const widgetUrl = apiUrl.replace('/api', '') + '/widgets/try-on-widget.js';
+    
+    const script = document.createElement('script');
+    script.src = widgetUrl;
+    script.onload = function() {
+      if (window.CloselookTryOnWidget) {
+        window.CloselookTryOnWidget.init({
+          container: widgetContainer,
+          product: shopifyProduct,
+          shopDomain: widgetContainer.dataset.shopDomain,
+          apiUrl: apiUrl
+        });
+      }
+    };
+    script.onerror = function() {
+      console.error('Failed to load Closelook Try-On Widget');
+    };
+    document.head.appendChild(script);
+  })();
+</script>
+
