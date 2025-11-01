@@ -1,11 +1,11 @@
 # Closelook Virtual Try-On Plugin
 
-A revolutionary virtual try-on system powered by Replicate's SeeDream-4 AI that creates photoreal images of customers wearing products.
+A revolutionary virtual try-on system powered by AI that creates photoreal images of customers wearing products.
 
 ## Features
 
 - **Floating Upload Widget**: Easy-to-use widget that floats on product pages
-- **AI-Powered Try-On**: Generates photoreal images using Replicate SeeDream-4
+- **AI-Powered Try-On**: Generates photoreal images using advanced AI models
 - **Model/User Toggle**: Switch between model photos and personalized try-on results
 - **Download & Share**: Download try-on images and share on social media
 - **Demo Store**: Complete e-commerce demo with 8 sample products
@@ -14,7 +14,7 @@ A revolutionary virtual try-on system powered by Replicate's SeeDream-4 AI that 
 
 - **Framework**: Next.js 15 with App Router
 - **UI**: Shadcn/ui + Tailwind CSS v4
-- **AI**: Replicate SeeDream-4 via Replicate SDK
+- **AI**: Advanced image generation and analysis models
 - **Styling**: Tailwind CSS with custom design tokens
 
 ## Getting Started
@@ -27,10 +27,11 @@ A revolutionary virtual try-on system powered by Replicate's SeeDream-4 AI that 
 2. **Set up environment variables**:
    Create a `.env.local` file in the root directory:
    \`\`\`bash
-   REPLICATE_API_TOKEN=your_replicate_api_token_here
+   REPLICATE_API_TOKEN=your_api_token_here
+   GOOGLE_GEMINI_API_KEY=your_api_key_here  # Optional: for enhanced features
    \`\`\`
    
-   Get your API token from: https://replicate.com/account/api-tokens
+   Contact your administrator for API credentials
 
 3. **Run the development server**:
    \`\`\`bash
@@ -39,6 +40,37 @@ A revolutionary virtual try-on system powered by Replicate's SeeDream-4 AI that 
 
 4. **Open the demo store**:
    Navigate to `http://localhost:3000`
+
+## Logging & Debugging
+
+The application uses a secure server-side logging system that sanitizes all third-party API references.
+
+### Viewing Logs
+
+**Development** (`npm run dev`):
+- Logs appear in the terminal where you run the dev server
+- Format: `[timestamp] [Closelook Server] message`
+
+**Production**:
+- Logs appear in your hosting platform's logs (Vercel, Railway, etc.)
+- Format: Same as development
+- For structured JSON logs, set `ENABLE_STRUCTURED_LOGGING=true` in your `.env.local`
+
+### Environment Variables
+
+All available environment variables:
+```bash
+REPLICATE_API_TOKEN=your_api_token_here
+GOOGLE_GEMINI_API_KEY=your_api_key_here  # Optional: for chatbot & analysis
+ENABLE_STRUCTURED_LOGGING=true           # Optional: enable JSON logging
+```
+
+### Security Features
+
+- ✅ All third-party API references are sanitized in logs
+- ✅ API keys are automatically redacted
+- ✅ Client-facing error messages are generic and secure
+- ✅ Server logs never expose sensitive implementation details
 
 ## Project Structure
 
@@ -69,7 +101,7 @@ A revolutionary virtual try-on system powered by Replicate's SeeDream-4 AI that 
 
 ### POST /api/try-on
 
-Generates a photoreal try-on image using Replicate SeeDream-4 API.
+Generates a photoreal try-on image using AI image generation.
 
 **Request (FormData)**:
 - `userPhoto`: File - User's photo
@@ -80,10 +112,10 @@ Generates a photoreal try-on image using Replicate SeeDream-4 API.
 **Response**:
 \`\`\`json
 {
-  "imageUrl": "https://replicate.delivery/...",
+  "imageUrl": "https://cdn.example.com/...",
   "productName": "Nike ZoomX Vomero Plus",
   "metadata": { 
-    "model": "bytedance/seedream-4", 
+    "model": "closelook-v1", 
     "timestamp": "...",
     "productAnalysis": { ... }
   }
@@ -92,7 +124,7 @@ Generates a photoreal try-on image using Replicate SeeDream-4 API.
 
 ### POST /api/analyze-product
 
-Analyzes product images to extract category and description using Replicate's vision models.
+Analyzes product images to extract category and description using AI vision models.
 
 **Request (FormData)**:
 - `productImage`: File - Product image to analyze
@@ -110,7 +142,7 @@ Analyzes product images to extract category and description using Replicate's vi
 
 ### POST /api/generate-image
 
-Generic image generation with custom prompts using Replicate SeeDream-4.
+Generic image generation with custom prompts using AI models.
 
 **Request (FormData)**:
 - `image1`: File - First input image
@@ -120,8 +152,8 @@ Generic image generation with custom prompts using Replicate SeeDream-4.
 **Response**:
 \`\`\`json
 {
-  "imageUrl": "https://replicate.delivery/...",
-  "metadata": { "model": "bytedance/seedream-4", "timestamp": "..." }
+  "imageUrl": "https://cdn.example.com/...",
+  "metadata": { "model": "closelook-v1", "timestamp": "..." }
 }
 \`\`\`
 
@@ -205,18 +237,22 @@ See `lib/closelook-plugin/README.md` for detailed integration guides.
 
 1. Push your code to GitHub
 2. Import your repository in Vercel
-3. Add the environment variable in Vercel dashboard:
-   - `REPLICATE_API_TOKEN`: Your Replicate API token
+3. Add the environment variables in Vercel dashboard:
+   - `REPLICATE_API_TOKEN`: Your API token
+   - `GOOGLE_GEMINI_API_KEY`: Optional, for enhanced features
+   - `ENABLE_STRUCTURED_LOGGING`: Optional, set to `true` for JSON logs
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new)
 
 ### Environment Variables
 
-The app requires the following environment variable:
+The app requires the following environment variables:
 
-- `REPLICATE_API_TOKEN` (required): Your Replicate API token from https://replicate.com/account/api-tokens
+- `REPLICATE_API_TOKEN` (required): API credentials
+- `GOOGLE_GEMINI_API_KEY` (optional): For enhanced AI features
+- `ENABLE_STRUCTURED_LOGGING` (optional): Enable structured JSON logging
 
-You can add this in the Vercel dashboard under Settings > Environment Variables, or in the v0 Vars section of the in-chat sidebar.
+Contact your system administrator for API credentials.
 
 ## Customization
 

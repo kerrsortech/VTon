@@ -5,6 +5,7 @@ import type React from "react"
 import { useState, useRef } from "react"
 import { Upload, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useCloselook } from "@/components/closelook-provider"
 import type { Product, TryOnResult } from "@/lib/closelook-types"
 
 interface CloselookWidgetProps {
@@ -21,6 +22,7 @@ export function CloselookWidget({ product, onTryOnComplete, className }: Closelo
   const [isHovering, setIsHovering] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dragCounterRef = useRef(0)
+  const { setGeneratingProductId } = useCloselook()
 
   const handleFileSelect = async (file: File) => {
     if (!file.type.startsWith("image/")) {
@@ -43,6 +45,7 @@ export function CloselookWidget({ product, onTryOnComplete, className }: Closelo
 
   const handleTryOn = async (file: File) => {
     setIsGenerating(true)
+    setGeneratingProductId(product.id)
     setError(null)
 
     try {
@@ -68,11 +71,9 @@ export function CloselookWidget({ product, onTryOnComplete, className }: Closelo
       formData.append("productColor", product.color)
 
       // Send product page URL if available (for enhanced product analysis)
-      // This allows Gemini to analyze the full product page for better understanding
       if (product.url || (typeof window !== "undefined" && window.location.href)) {
         const productUrl = product.url || window.location.href
         formData.append("productUrl", productUrl)
-        console.log("[CloselookWidget] Product URL provided:", productUrl)
       }
 
       const response = await fetch("/api/try-on", {
@@ -83,20 +84,22 @@ export function CloselookWidget({ product, onTryOnComplete, className }: Closelo
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
 
-        if (response.status === 429 || errorData.errorType === "QUOTA_EXCEEDED") {
+        if (response.status === 429 || errorData.errorType === "RATE_LIMIT_EXCEEDED" || errorData.errorType === "QUOTA_EXCEEDED") {
           throw new Error(
-            errorData.details || "API quota exceeded. Please check your Google Gemini API plan and billing details.",
+            errorData.error || "Service temporarily unavailable. Please try again in a moment.",
           )
         }
 
-        throw new Error(errorData.details || errorData.error || "Failed to generate try-on image")
+        throw new Error(errorData.error || "Failed to generate try-on image")
       }
 
       const result: TryOnResult = await response.json()
       onTryOnComplete?.(result)
       setUserPhoto(null)
+      setGeneratingProductId(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate try-on")
+      setGeneratingProductId(null)
     } finally {
       setIsGenerating(false)
     }

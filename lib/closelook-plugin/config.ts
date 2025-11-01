@@ -7,6 +7,7 @@ import type { CloselookConfig } from "./types"
 import type { ProductAdapter } from "./adapters/base-adapter"
 import { DemoProductAdapter } from "./adapters/demo-adapter"
 import { ShopifyProductAdapter } from "./adapters/shopify-adapter"
+import { logger } from "../server-logger"
 
 class CloselookPluginConfig {
   private config: CloselookConfig
@@ -36,7 +37,7 @@ class CloselookPluginConfig {
         const storeDomain = this.config.platformConfig?.storeDomain as string
         const accessToken = this.config.platformConfig?.accessToken as string
         if (!storeDomain || !accessToken) {
-          console.warn("Shopify configuration missing, falling back to demo adapter")
+          logger.warn("Shopify configuration missing, falling back to demo adapter")
           return new DemoProductAdapter()
         }
         return new ShopifyProductAdapter(storeDomain, accessToken)
@@ -44,12 +45,12 @@ class CloselookPluginConfig {
 
       case "woocommerce":
         // TODO: Implement WooCommerce adapter
-        console.warn("WooCommerce adapter not yet implemented, using demo adapter")
+        logger.warn("WooCommerce adapter not yet implemented, using demo adapter")
         return new DemoProductAdapter()
 
       case "custom":
         // TODO: Allow custom adapter injection
-        console.warn("Custom adapter not configured, using demo adapter")
+        logger.warn("Custom adapter not configured, using demo adapter")
         return new DemoProductAdapter()
 
       case "demo":

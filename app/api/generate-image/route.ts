@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai"
 import { type NextRequest, NextResponse } from "next/server"
+import { logger, sanitizeErrorForClient } from "@/lib/server-logger"
 
 async function convertImageToSupportedFormat(file: File): Promise<{ buffer: Buffer; mimeType: string }> {
   const supportedTypes = ["image/png", "image/jpeg", "image/webp", "image/avif"]
@@ -23,7 +24,8 @@ export async function POST(request: NextRequest) {
   try {
     const apiKey = process.env.GOOGLE_GEMINI_API_KEY
     if (!apiKey) {
-      return NextResponse.json({ error: "Google Gemini API key not configured" }, { status: 500 })
+      logger.error("AI Engine configuration missing")
+      return NextResponse.json({ error: "Configuration error" }, { status: 500 })
     }
 
     const ai = new GoogleGenAI({ apiKey })
@@ -72,30 +74,19 @@ export async function POST(request: NextRequest) {
         ],
       })
     } catch (apiError: any) {
-      console.error("Gemini API Error:", apiError)
-
-      // Handle quota exceeded errors specifically
-      if (apiError.message?.includes("quota") || apiError.message?.includes("429")) {
-        return NextResponse.json(
-          {
-            error: "API quota exceeded. Please check your Google Gemini API billing and quota limits.",
-            errorType: "QUOTA_EXCEEDED",
-            details:
-              "Your Google Gemini API has reached its usage limit. Please upgrade your plan or wait for the quota to reset.",
-          },
-          { status: 429 },
-        )
+      logger.error("Image generation API error", { error: apiError.message })
+      const sanitizedError = sanitizeErrorForClient(apiError)
+      
+      let statusCode = 500
+      if (sanitizedError.errorType === "RATE_LIMIT_EXCEEDED") {
+        statusCode = 429
+      } else if (sanitizedError.errorType === "VALIDATION_ERROR") {
+        statusCode = 400
+      } else if (sanitizedError.errorType === "REQUEST_TIMEOUT") {
+        statusCode = 504
       }
-
-      // Handle other API errors
-      return NextResponse.json(
-        {
-          error: "Failed to generate image",
-          errorType: "API_ERROR",
-          details: apiError.message || "An error occurred while calling the Gemini API",
-        },
-        { status: 500 },
-      )
+      
+      return NextResponse.json(sanitizedError, { status: statusCode })
     }
 
     let generatedImageData: string | null = null
@@ -120,7 +111,18 @@ export async function POST(request: NextRequest) {
       text: generatedText,
     })
   } catch (error) {
-    console.error("Error in generate-image POST handler:", error)
-    return NextResponse.json({ error: "Failed to generate image" }, { status: 500 })
+    logger.error("Error in generate-image POST handler", { error })
+    const sanitizedError = sanitizeErrorForClient(error)
+    
+    let statusCode = 500
+    if (sanitizedError.errorType === "RATE_LIMIT_EXCEEDED") {
+      statusCode = 429
+    } else if (sanitizedError.errorType === "VALIDATION_ERROR") {
+      statusCode = 400
+    } else if (sanitizedError.errorType === "REQUEST_TIMEOUT") {
+      statusCode = 504
+    }
+    
+    return NextResponse.json(sanitizedError, { status: statusCode })
   }
 }

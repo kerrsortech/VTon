@@ -1,7 +1,7 @@
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { demoProducts } from "@/lib/demo-products"
-import { Search, Heart, ShoppingBag } from "lucide-react"
+import { Search, Heart, ShoppingBag, User } from "lucide-react"
 
 export default function HomePage() {
   return (
@@ -72,6 +72,9 @@ export default function HomePage() {
               <button className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
                 <Heart className="h-6 w-6" />
               </button>
+              <Link href="/profile" className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
+                <User className="h-6 w-6" />
+              </Link>
               <button className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
                 <ShoppingBag className="h-6 w-6" />
               </button>
@@ -82,9 +85,22 @@ export default function HomePage() {
 
       {/* Hero Section */}
       <section className="relative h-[600px] bg-neutral-100 overflow-hidden">
-        <img src="/placeholder.svg?height=600&width=1920" alt="Hero" className="w-full h-full object-cover" />
+        <video
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="w-full h-full object-cover"
+          aria-label="Virtual try-on technology showcase"
+        >
+          <source src="/Header_video.mp4" type="video/mp4" />
+          {/* Fallback image if video doesn't load */}
+          <img src="/placeholder.svg?height=600&width=1920" alt="Hero" className="w-full h-full object-cover" />
+        </video>
+        {/* Overlay for better text readability */}
+        <div className="absolute inset-0 bg-black/30"></div>
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="text-center text-white">
+          <div className="text-center text-white drop-shadow-lg">
             <h1 className="text-6xl md:text-7xl font-black mb-6 tracking-tight">TRY BEFORE YOU BUY</h1>
             <p className="text-xl md:text-2xl mb-8 font-medium">Experience Virtual Try-On Technology</p>
             <Button

@@ -5,6 +5,7 @@
  */
 
 import { GoogleGenAI } from "@google/genai"
+import { logger } from "./server-logger"
 
 // Note: GoogleGenAI is the same as GoogleGenerativeAI from @google/generative-ai
 // Using the same import pattern as analyze-product route
@@ -23,7 +24,7 @@ export interface ProductPageAnalysis {
  */
 async function fetchPageContent(url: string): Promise<string | null> {
   try {
-    console.log("[ProductPage] Fetching page content from:", url)
+    logger.debug("Fetching page content", { url })
     
     const response = await fetch(url, {
       method: "GET",
@@ -34,15 +35,15 @@ async function fetchPageContent(url: string): Promise<string | null> {
     })
 
     if (!response.ok) {
-      console.warn("[ProductPage] Failed to fetch page:", response.status, response.statusText)
+      logger.warn("Failed to fetch page", { status: response.status, statusText: response.statusText })
       return null
     }
 
     const html = await response.text()
-    console.log("[ProductPage] Page content fetched, length:", html.length)
+    logger.debug("Page content fetched", { length: html.length })
     return html
   } catch (error) {
-    console.error("[ProductPage] Error fetching page:", error)
+    logger.error("Error fetching page", { error })
     return null
   }
 }
@@ -94,7 +95,7 @@ function extractProductContent(html: string): string {
 
     return extractedText.trim()
   } catch (error) {
-    console.error("[ProductPage] Error extracting content:", error)
+    logger.error("Error extracting content", { error })
     return html.substring(0, 5000) // Fallback to raw HTML (limited)
   }
 }
@@ -107,18 +108,18 @@ export async function analyzeProductPage(
   apiKey: string,
 ): Promise<ProductPageAnalysis | null> {
   try {
-    console.log("[ProductPage] Starting product page analysis for:", productUrl)
+    logger.debug("Starting product page analysis", { productUrl })
 
     // Fetch page content
     const html = await fetchPageContent(productUrl)
     if (!html) {
-      console.warn("[ProductPage] Could not fetch page content")
+      logger.warn("Could not fetch page content")
       return null
     }
 
     // Extract product-relevant content
     const pageContent = extractProductContent(html)
-    console.log("[ProductPage] Extracted content length:", pageContent.length)
+    logger.debug("Extracted content", { length: pageContent.length })
 
     // Use Gemini to analyze the page content
     const ai = new GoogleGenAI({ apiKey })
@@ -148,7 +149,7 @@ CRITICAL REQUIREMENTS:
 
 Return ONLY valid JSON, no additional text.`
 
-    console.log("[ProductPage] Sending page analysis to Gemini")
+    logger.debug("Sending page analysis to AI")
 
     const response = await ai.models.generateContent({
       model: "gemini-2.0-flash-exp",
@@ -165,24 +166,21 @@ Return ONLY valid JSON, no additional text.`
     })
 
     const analysisText = response.text || ""
-    console.log("[ProductPage] Gemini response received, length:", analysisText.length)
+    logger.debug("AI response received", { length: analysisText.length })
 
     // Parse JSON response
     const jsonMatch = analysisText.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {
-      console.warn("[ProductPage] Failed to parse JSON from response")
-      console.log("[ProductPage] Raw response:", analysisText)
+      logger.warn("Failed to parse JSON from response")
       return null
     }
 
     const analysis = JSON.parse(jsonMatch[0]) as ProductPageAnalysis
-    console.log("[ProductPage] Product page analysis successful")
-    console.log("[ProductPage] - Enhanced Description:", analysis.enhancedDescription?.substring(0, 100))
-    console.log("[ProductPage] - Summary:", analysis.summary?.substring(0, 100))
+    logger.debug("Product page analysis successful")
 
     return analysis
   } catch (error) {
-    console.error("[ProductPage] Error analyzing product page:", error)
+    logger.error("Error analyzing product page", { error })
     return null
   }
 }

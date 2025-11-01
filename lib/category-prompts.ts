@@ -184,6 +184,9 @@ MANDATORY FIDELITY RULES:
 IDENTITY & POSE:
 Extracted user characteristics: {{USER_CHARACTERISTICS_JSON}}. Preserve these identity attributes EXACTLY: face shape, facial hair, hairline, eye shape, and skin tone.
 
+CRITICAL GENDER SPECIFICATION:
+The person in the generated image MUST be {{USER_GENDER}} (unless "unknown" is specified, then infer from user photo). When {{USER_GENDER}} is specified as "male" or "female", the physical features, body proportions, and overall appearance must accurately reflect {{USER_GENDER}} characteristics. Use realistic and natural {{USER_GENDER}} anatomical features, bone structure, and body proportions.
+
 {{CATEGORY_SPECIFIC_INSTRUCTIONS}}
 
 Pose & framing (MANDATORY):
@@ -395,6 +398,7 @@ export function buildCategoryPrompt(
     productDescription: string
     genImageInstructions: string
     userCharacteristicsJson: string
+    userGender: string
     cameraHint: string
     productScaleRatio: string
     productScaleCategory: string
@@ -414,6 +418,7 @@ export function buildCategoryPrompt(
     .replace(/\{\{PRODUCT_DESCRIPTION\}\}/g, values.productDescription)
     .replace(/\{\{GEN_IMAGE_INSTRUCTIONS\}\}/g, values.genImageInstructions)
     .replace(/\{\{USER_CHARACTERISTICS_JSON\}\}/g, values.userCharacteristicsJson)
+    .replace(/\{\{USER_GENDER\}\}/g, values.userGender)
     .replace(/\{\{CAMERA_HINT\}\}/g, values.cameraHint)
     .replace(/\{\{PRODUCT_SCALE_RATIO\}\}/g, values.productScaleRatio)
     .replace(/\{\{PRODUCT_SCALE_CATEGORY\}\}/g, values.productScaleCategory)

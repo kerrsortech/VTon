@@ -38,6 +38,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollAreaRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -55,11 +56,25 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
     setMessages([{ role: "assistant", content: greeting }])
   }, [pathname, currentProduct])
 
+  // Auto-scroll to bottom when messages change or loading state changes
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [messages])
+    // Use setTimeout to ensure DOM has updated
+    const scrollTimeout = setTimeout(() => {
+      // Try to scroll the inner scroll container (ScrollArea component)
+      if (scrollAreaRef.current) {
+        const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement
+        if (scrollContainer) {
+          scrollContainer.scrollTop = scrollContainer.scrollHeight
+        }
+      }
+      // Fallback to direct scroll
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      }
+    }, 100)
+
+    return () => clearTimeout(scrollTimeout)
+  }, [messages, isLoading])
 
   useEffect(() => {
     if (isOpen && inputRef.current) {
@@ -198,7 +213,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
 
           {/* Messages */}
           <div className="flex-1 overflow-hidden">
-            <ScrollArea className="h-full">
+            <ScrollArea className="h-full" ref={scrollAreaRef}>
               <div className="p-4 space-y-4" ref={scrollRef}>
                 {messages.map((message, index) => (
                   <div key={index} className={cn("flex", message.role === "user" ? "justify-end" : "justify-start")}>

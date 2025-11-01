@@ -24,13 +24,14 @@ import {
   enhanceProductMetadata,
   validatePromptQuality,
 } from "@/lib/production-enhancements"
+import { logger, sanitizeErrorForClient } from "@/lib/server-logger"
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now()
   let requestId = `req-${Date.now()}-${Math.random().toString(36).substring(7)}`
 
   try {
-    console.log(`[${requestId}] Try-on request started`)
+    logger.info("Try-on request started", { requestId })
 
     const formData = await request.formData()
     const userPhoto = formData.get("userPhoto") as File
@@ -50,7 +51,7 @@ export async function POST(request: NextRequest) {
 
     // Input validation
     if (!userPhoto || productImages.length === 0 || !productName) {
-      console.log(`[${requestId}] Validation failed: Missing required fields`)
+      logger.warn("Validation failed: Missing required fields", { requestId })
       return NextResponse.json(
         {
           error: "Missing required fields",
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
     // Validate user photo
     const userPhotoValidation = validateUserPhoto(userPhoto)
     if (!userPhotoValidation.isValid) {
-      console.log(`[${requestId}] User photo validation failed:`, userPhotoValidation.errors)
+      logger.warn("User photo validation failed", { requestId, errors: userPhotoValidation.errors })
       return NextResponse.json(
         {
           error: "Invalid user photo",
@@ -77,7 +78,7 @@ export async function POST(request: NextRequest) {
     // Validate product images
     const productImagesValidation = validateProductImages(productImages)
     if (!productImagesValidation.isValid) {
-      console.log(`[${requestId}] Product images validation failed:`, productImagesValidation.errors)
+      logger.warn("Product images validation failed", { requestId, errors: productImagesValidation.errors })
       return NextResponse.json(
         {
           error: "Invalid product images",
@@ -88,34 +89,33 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    console.log(`[${requestId}] Try-on request received for:`, productName)
-    console.log(`[${requestId}] Number of product images:`, productImages.length)
+    logger.info("Try-on request received", { requestId, productName, imageCount: productImages.length })
     if (userPhotoValidation.warnings.length > 0) {
-      console.log(`[${requestId}] User photo warnings:`, userPhotoValidation.warnings)
+      logger.warn("User photo warnings", { requestId, warnings: userPhotoValidation.warnings })
     }
     if (productImagesValidation.warnings.length > 0) {
-      console.log(`[${requestId}] Product images warnings:`, productImagesValidation.warnings)
+      logger.warn("Product images warnings", { requestId, warnings: productImagesValidation.warnings })
     }
 
     const apiKey = process.env.REPLICATE_API_TOKEN
     if (!apiKey) {
-      return NextResponse.json({ error: "Replicate API token not configured" }, { status: 500 })
+      logger.error("Image generation service configuration missing")
+      return NextResponse.json({ error: "Configuration error" }, { status: 500 })
     }
 
     // Detect body availability (using sync version for now - can be enhanced with async later)
     const userBodyAvailability = detectBodyAvailabilitySync(userPhoto)
-    console.log(`[${requestId}] Detected body availability:`, userBodyAvailability)
+    logger.debug("Detected body availability", { requestId, bodyAvailability: userBodyAvailability })
 
-    console.log(`[${requestId}] Analyzing product with Gemini (sending user photo + product image)...`)
+    logger.info("Analyzing product", { requestId })
     const productAnalysisFormData = new FormData()
     productAnalysisFormData.append("userPhoto", userPhoto)
     productAnalysisFormData.append("productImage", productImages[0])
     
     // Add product URL for enhanced page analysis (if available)
-    // This allows Gemini to analyze the full product page for better understanding
     if (productUrl && productUrl.trim().length > 0 && productUrl.startsWith("http")) {
       productAnalysisFormData.append("productUrl", productUrl)
-      console.log(`[${requestId}] Product URL provided for page analysis:`, productUrl)
+      logger.debug("Product URL provided for page analysis", { requestId })
     }
     
     const analysisResponse = await fetch(`${request.nextUrl.origin}/api/analyze-product`, {
@@ -129,22 +129,21 @@ export async function POST(request: NextRequest) {
     if (analysisResponse.ok) {
       const analysisData = await analysisResponse.json()
       productMetadata = analysisData.metadata
-      console.log(`[${requestId}] Product analysis successful`)
+      logger.info("Product analysis successful", { requestId })
 
       // Check if page analysis was performed
       if (analysisData.pageAnalysis) {
-        console.log(`[${requestId}] Product page analysis was used`)
-        console.log(`[${requestId}] Page analysis summary:`, analysisData.pageAnalysis.summary?.substring(0, 100))
+        logger.debug("Product page analysis was used", { requestId })
       }
 
       // Validate product metadata
       const metadataValidation = validateProductMetadata(productMetadata)
       if (metadataValidation.warnings.length > 0) {
-        console.log(`[${requestId}] Product metadata warnings:`, metadataValidation.warnings)
+        logger.warn("Product metadata warnings", { requestId, warnings: metadataValidation.warnings })
       }
 
       if (analysisData.validation?.hasUnknownValues || analysisData.validation?.promptLength < 100) {
-        console.log(`[${requestId}] Warning: Low quality analysis detected, using fallback`)
+        logger.warn("Low quality analysis detected, using fallback", { requestId })
         usedFallback = true
       }
 
@@ -154,7 +153,7 @@ export async function POST(request: NextRequest) {
         productMetadata.detailedVisualDescription || `${productName} - A stylish product with premium design.`,
       )
     } else {
-      console.log(`[${requestId}] Product analysis failed, using fallback`)
+      logger.warn("Product analysis failed, using fallback", { requestId })
       usedFallback = true
       const fallbackCategory = sanitizeCategory(productCategory || "Fashion Accessory")
       productMetadata = {
@@ -174,7 +173,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    console.log(`[${requestId}] Uploading images to Blob storage...`)
+    logger.debug("Uploading images to Blob storage", { requestId })
     const userPhotoBlob = await put(`try-on/user-${Date.now()}-${userPhoto.name}`, userPhoto, {
       access: "public",
     })
@@ -186,8 +185,7 @@ export async function POST(request: NextRequest) {
         }),
       ),
     )
-    console.log(`[${requestId}] Images uploaded successfully`)
-    console.log(`[${requestId}] Product image URLs:`, productImageBlobs.map((b) => b.url).join(", "))
+    logger.debug("Images uploaded successfully", { requestId })
 
     // Map detected category to our standardized category type
     const detectedCategory = productMetadata.productCategory || productCategory || "Unknown"
@@ -197,13 +195,11 @@ export async function POST(request: NextRequest) {
     // Enhance metadata with category config now that it's available
     productMetadata = enhanceProductMetadata(productMetadata, productName, productCategory, categoryConfig)
 
-    console.log(`[${requestId}] Detected category:`, detectedCategory)
-    console.log(`[${requestId}] Mapped to category type:`, categoryType)
-    console.log(`[${requestId}] Category config:`, JSON.stringify(categoryConfig, null, 2))
+    logger.debug("Detected category", { requestId, detectedCategory, categoryType })
 
     // Determine if body reconstruction is needed
     const needsBodyReconstruction = requiresBodyReconstruction(categoryType, userBodyAvailability)
-    console.log(`[${requestId}] Body reconstruction needed:`, needsBodyReconstruction)
+    logger.debug("Body reconstruction needed", { requestId, needsBodyReconstruction })
 
     // Use category-specific config with fallback to Gemini analysis
     const cameraHint =
@@ -241,20 +237,16 @@ export async function POST(request: NextRequest) {
         ? productMetadata.negativePrompt
         : getCategoryNegativePrompt(categoryType)
 
-    console.log(`[${requestId}] Using camera hint:`, cameraHint)
-    console.log(`[${requestId}] Using product scale ratio:`, productScaleRatio)
-    console.log(`[${requestId}] Using product scale category:`, productScaleCategory)
-    console.log(`[${requestId}] Using target framing:`, targetFramingToUse)
-    console.log(`[${requestId}] Using background instruction:`, backgroundInstruction)
-
     const userCharacteristicsJson =
       productMetadata.userCharacteristics && typeof productMetadata.userCharacteristics === "object"
         ? JSON.stringify(productMetadata.userCharacteristics)
         : '{"visibility":"Unknown","genderHint":"unknown"}'
 
-    console.log(`[${requestId}] Using positive prompt:`, positivePrompt.substring(0, 100) + "...")
-    console.log(`[${requestId}] Using negative prompt:`, negativePrompt.substring(0, 100) + "...")
-    console.log(`[${requestId}] Using user characteristics:`, userCharacteristicsJson)
+    // Extract gender hint from user characteristics
+    let userGender = "unknown"
+    if (productMetadata.userCharacteristics && typeof productMetadata.userCharacteristics === "object") {
+      userGender = productMetadata.userCharacteristics.genderHint || "unknown"
+    }
 
     // Build category-specific prompt
     // Enhanced product description already includes page analysis if available
@@ -265,6 +257,7 @@ export async function POST(request: NextRequest) {
       productDescription: productMetadata.detailedVisualDescription || sanitizeDescription(`${productName} - a stylish ${detectedCategory}`),
       genImageInstructions: productMetadata.imageGenerationPrompt || `Show the person wearing the ${detectedCategory} in a natural, confident pose. Position the product prominently so it's clearly visible. Use professional studio lighting and a clean background.`,
       userCharacteristicsJson: userCharacteristicsJson,
+      userGender: userGender,
       cameraHint: cameraHint,
       productScaleRatio: String(productScaleRatio),
       productScaleCategory: productScaleCategory,
@@ -283,7 +276,7 @@ export async function POST(request: NextRequest) {
       )
       if (bodyReconstructionInstructions) {
         prompt = bodyReconstructionInstructions + "\n\n" + prompt
-        console.log(`[${requestId}] Added body reconstruction instructions`)
+        logger.debug("Added body reconstruction instructions", { requestId })
       }
     }
 
@@ -298,21 +291,19 @@ export async function POST(request: NextRequest) {
     // Validate prompt quality
     const promptValidation = validatePromptQuality(prompt, categoryConfig)
     if (promptValidation.errors.length > 0) {
-      console.error(`[${requestId}] Prompt validation errors:`, promptValidation.errors)
+      logger.error("Prompt validation errors", { requestId, errors: promptValidation.errors })
     }
     if (promptValidation.warnings.length > 0 || promptWarnings.length > 0) {
-      console.log(`[${requestId}] Prompt quality warnings:`, [...promptValidation.warnings, ...promptWarnings])
+      logger.warn("Prompt quality warnings", { requestId, warnings: [...promptValidation.warnings, ...promptWarnings] })
     }
 
-    console.log(`[${requestId}] Generated category-specific prompt with placeholders filled`)
-    console.log(`[${requestId}] Prompt length:`, prompt.length)
+    logger.debug("Generated category-specific prompt", { requestId, promptLength: prompt.length })
 
     const replicate = new Replicate({ auth: apiKey })
 
     // The prompt still references all product URLs for context
     const imageInputArray = [userPhotoBlob.url, productImageBlobs[0].url]
-    console.log(`[${requestId}] Image input array length:`, imageInputArray.length)
-    console.log(`[${requestId}] Sending to SeeDream-4: user photo + first product image`)
+    logger.debug("Preparing image generation", { requestId, imageInputCount: imageInputArray.length })
 
     const input = {
       size: "2K",
@@ -325,27 +316,24 @@ export async function POST(request: NextRequest) {
       sequential_image_generation: "disabled",
     }
 
-    console.log(`[${requestId}] Calling Replicate SeeDream-4...`)
+    logger.debug("Calling image generation service", { requestId })
 
     let output
     try {
       output = await replicate.run("bytedance/seedream-4", { input })
     } catch (replicateError) {
-      console.error(`[${requestId}] Replicate API error:`, replicateError)
+      logger.error("Image generation service error", { requestId, error: replicateError })
       throw new Error(
-        `Replicate API failed: ${replicateError instanceof Error ? replicateError.message : String(replicateError)}`,
+        `Image generation failed: ${replicateError instanceof Error ? replicateError.message : String(replicateError)}`,
       )
     }
 
-    console.log(`[${requestId}] Replicate output received`)
-    console.log(`[${requestId}] Output type:`, typeof output)
-    console.log(`[${requestId}] Output is array:`, Array.isArray(output))
+    logger.debug("Image generation output received", { requestId })
 
     let imageUrl: string | undefined
 
     if (Array.isArray(output) && output.length > 0) {
       const firstItem = output[0]
-      console.log(`[${requestId}] First item type:`, typeof firstItem)
 
       if (typeof firstItem === "string") {
         imageUrl = firstItem
@@ -362,26 +350,24 @@ export async function POST(request: NextRequest) {
         throw new Error("Unexpected output format")
       }
     } else {
-      throw new Error("No output received from Replicate")
+      throw new Error("No output received from service")
     }
-
-    console.log(`[${requestId}] Final image URL:`, imageUrl)
 
     // Validate generated image URL
     const imageUrlValidation = validateGeneratedImageUrl(imageUrl)
     if (!imageUrlValidation.isValid) {
-      console.error(`[${requestId}] Generated image URL validation failed:`, imageUrlValidation.errors)
+      logger.error("Generated image URL validation failed", { requestId, errors: imageUrlValidation.errors })
       throw new Error(`Invalid generated image URL: ${imageUrlValidation.errors.join("; ")}`)
     }
     if (imageUrlValidation.warnings.length > 0) {
-      console.log(`[${requestId}] Image URL warnings:`, imageUrlValidation.warnings)
+      logger.warn("Image URL warnings", { requestId, warnings: imageUrlValidation.warnings })
     }
 
     return NextResponse.json({
       imageUrl,
       productName,
       metadata: {
-        model: "bytedance/seedream-4",
+        model: "closelook-v1",
         timestamp: new Date().toISOString(),
         requestId,
         processingTime: Date.now() - startTime,
@@ -400,47 +386,25 @@ export async function POST(request: NextRequest) {
         flags: {
           usedFallback,
           userBodyAvailability,
-          geminiConfidence: usedFallback ? "low" : "high",
+          analysisConfidence: usedFallback ? "low" : "high",
           productScaleRatio,
           productScaleCategory,
         },
       },
     })
   } catch (error) {
-    const errorDetails = error instanceof Error ? error.message : String(error)
-    console.error(`[${requestId}] Error:`, errorDetails)
-    console.error(`[${requestId}] Error stack:`, error instanceof Error ? error.stack : "No stack trace")
-
-    // Enhanced error handling
+    logger.error("Try-on request failed", { requestId, error: error instanceof Error ? error.message : String(error) })
+    const sanitizedError = sanitizeErrorForClient(error, requestId)
+    
     let statusCode = 500
-    let errorMessage = "Failed to generate try-on image"
-    let errorType = "UNKNOWN_ERROR"
-
-    if (errorDetails.includes("quota") || errorDetails.includes("429")) {
+    if (sanitizedError.errorType === "RATE_LIMIT_EXCEEDED") {
       statusCode = 429
-      errorMessage = "API quota exceeded"
-      errorType = "QUOTA_EXCEEDED"
-    } else if (errorDetails.includes("timeout") || errorDetails.includes("TIMEOUT")) {
-      statusCode = 504
-      errorMessage = "Request timeout - image generation took too long"
-      errorType = "TIMEOUT"
-    } else if (errorDetails.includes("Invalid") || errorDetails.includes("validation")) {
+    } else if (sanitizedError.errorType === "VALIDATION_ERROR") {
       statusCode = 400
-      errorMessage = errorDetails
-      errorType = "VALIDATION_ERROR"
-    } else if (errorDetails.includes("Replicate")) {
-      errorType = "REPLICATE_API_ERROR"
+    } else if (sanitizedError.errorType === "REQUEST_TIMEOUT") {
+      statusCode = 504
     }
-
-    return NextResponse.json(
-      {
-        error: errorMessage,
-        details: errorDetails,
-        errorType,
-        requestId,
-        timestamp: new Date().toISOString(),
-      },
-      { status: statusCode },
-    )
+    
+    return NextResponse.json(sanitizedError, { status: statusCode })
   }
 }

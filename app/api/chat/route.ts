@@ -2,6 +2,14 @@ import { GoogleGenerativeAI } from "@google/generative-ai"
 import { type NextRequest, NextResponse } from "next/server"
 import { smartFilterProducts } from "@/lib/product-filter"
 import type { Product } from "@/lib/closelook-types"
+import { logger, sanitizeErrorForClient } from "@/lib/server-logger"
+import {
+  retrieveRelevantProducts,
+  extractQueryIntent,
+  getProductLimitForQuery,
+  type QueryIntent,
+} from "@/lib/semantic-product-search"
+import { extractProductsFromResponse } from "@/lib/product-extractor"
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "")
 
@@ -9,8 +17,18 @@ const SYSTEM_PROMPT = `You are a friendly and knowledgeable sales assistant for 
 
 1. **Product Expertise**: Provide detailed information about products including fit, materials, sizing, styling tips, and care instructions.
 
-2. **Personalized Recommendations**: Suggest complementary products that match well with what the customer is viewing or asking about. When recommending products, ALWAYS format them as JSON objects in this exact format:
-   PRODUCT_RECOMMENDATION: {"id": "product-id", "name": "Product Name", "price": 99, "reason": "Why this matches"}
+2. **Personalized Recommendations**: Suggest complementary products that match well with what the customer is viewing or asking about. 
+
+CRITICAL: When recommending ANY product (whether in the response text or as a separate recommendation), you MUST format it using the PRODUCT_RECOMMENDATION format. DO NOT mention products in plain text format (like "Jacket ($120)") without also including the PRODUCT_RECOMMENDATION format.
+
+Required format for ALL product recommendations:
+PRODUCT_RECOMMENDATION: {"id": "product-id", "name": "Product Name", "price": 99, "reason": "Why this matches"}
+
+IMPORTANT:
+- Every product you recommend MUST use the PRODUCT_RECOMMENDATION format
+- You can mention the product in your text response, but ALSO include the PRODUCT_RECOMMENDATION format
+- If you mention multiple products, include a PRODUCT_RECOMMENDATION for each one
+- The product ID must match exactly with the product IDs in the AVAILABLE PRODUCTS list
 
 3. **Fit & Sizing Guidance**: Help customers determine if a product will fit them based on their questions. Ask clarifying questions about their preferences, body type, or intended use.
 
@@ -68,23 +86,73 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Message is required" }, { status: 400 })
     }
 
-    // Check if this is a product search/filter query
-    const isSearchQuery = isProductSearchQuery(message)
-    let filteredProducts: Product[] = []
+    // SCALABILITY: Use semantic search to retrieve only relevant products
+    // This prevents sending entire catalog (e.g., 1000 products) to LLM
+    let relevantProducts: Product[] = []
+    let queryIntent: QueryIntent | null = null
     let recommendations: any[] = []
 
-    // If it's a search query, filter products programmatically
-    if (isSearchQuery && allProducts && allProducts.length > 0) {
-      filteredProducts = smartFilterProducts(allProducts as Product[], message)
+    const catalogSize = allProducts?.length || 0
+    const isLargeCatalog = catalogSize > 50
 
-      // If we found matching products, convert them to recommendations
-      if (filteredProducts.length > 0) {
-        recommendations = filteredProducts.slice(0, 10).map((product) => ({
-          id: product.id,
-          name: product.name,
-          price: product.price,
-          reason: `Matches your search criteria`,
-        }))
+    // For large catalogs, use intelligent product retrieval
+    if (isLargeCatalog && allProducts && allProducts.length > 0) {
+      try {
+        const apiKey = process.env.GOOGLE_GEMINI_API_KEY || ""
+        
+        // Extract query intent first (helps determine how many products to retrieve)
+        if (apiKey) {
+          queryIntent = await extractQueryIntent(message, apiKey).catch((error) => {
+            console.warn("[Chat] Intent extraction failed, using fallback:", error)
+            return null
+          })
+        }
+
+        // Retrieve only relevant products (top N based on query intent)
+        const productLimit = queryIntent
+          ? getProductLimitForQuery(queryIntent, catalogSize)
+          : 20 // Default limit
+
+        relevantProducts = await retrieveRelevantProducts(allProducts as Product[], message, {
+          maxProducts: productLimit,
+          useGeminiIntent: !!apiKey,
+          apiKey: apiKey,
+        })
+
+        console.log(
+          `[Chat] Retrieved ${relevantProducts.length} relevant products from catalog of ${catalogSize} products`,
+        )
+
+        // Convert to recommendations format
+        if (relevantProducts.length > 0) {
+          recommendations = relevantProducts.slice(0, 10).map((product) => ({
+            id: product.id,
+            name: product.name,
+            price: product.price,
+            reason: `Matches your query criteria`,
+          }))
+        }
+      } catch (error) {
+        console.error("[Chat] Error in semantic search, falling back to simple filter:", error)
+        // Fallback to simple filter
+        relevantProducts = smartFilterProducts(allProducts as Product[], message).slice(0, 20)
+      }
+    } else if (allProducts && allProducts.length > 0) {
+      // For small catalogs, use simple filtering
+      const isSearchQuery = isProductSearchQuery(message)
+      if (isSearchQuery) {
+        relevantProducts = smartFilterProducts(allProducts as Product[], message)
+        if (relevantProducts.length > 0) {
+          recommendations = relevantProducts.slice(0, 10).map((product) => ({
+            id: product.id,
+            name: product.name,
+            price: product.price,
+            reason: `Matches your search criteria`,
+          }))
+        }
+      } else {
+        // For small catalogs and non-search queries, use all products
+        relevantProducts = allProducts as Product[]
       }
     }
 
@@ -98,34 +166,40 @@ export async function POST(request: NextRequest) {
       contextMessage = `\n\nPAGE CONTEXT: The customer is browsing the Closelook store.\n`
     }
 
-    // Add available products for recommendations
-    // If we have filtered products, prioritize those; otherwise use all products
-    const productsToShow = filteredProducts.length > 0 ? filteredProducts : (allProducts || [])
+    // SCALABILITY: Only send relevant products to LLM, not entire catalog
+    // For large catalogs, we've already filtered to top N relevant products
+    const productsToShow = relevantProducts.length > 0 ? relevantProducts : (allProducts || [])
     
-    if (productsToShow.length > 0) {
-      if (filteredProducts.length > 0) {
-        contextMessage += `\n\nFILTERED PRODUCTS (matching the customer's search criteria):\n${filteredProducts
-          .map((p: any) => {
-            const sizeInfo = p.sizes && p.sizes.length > 0 ? `, Available Sizes: ${p.sizes.join(", ")}` : ""
-            return `- ID: ${p.id}, Name: ${p.name}, Category: ${p.category}, Type: ${p.type}, Color: ${p.color}, Price: $${p.price}${sizeInfo}`
-          })
-          .join("\n")}\n`
-      } else {
-        contextMessage += `\n\nAVAILABLE PRODUCTS FOR RECOMMENDATIONS:\n${productsToShow
-          .map((p: any) => {
-            const sizeInfo = p.sizes && p.sizes.length > 0 ? `, Available Sizes: ${p.sizes.join(", ")}` : ""
-            return `- ID: ${p.id}, Name: ${p.name}, Category: ${p.category}, Type: ${p.type}, Color: ${p.color}, Price: $${p.price}${sizeInfo}`
-          })
-          .join("\n")}\n`
+    // Limit products sent to LLM to prevent token overflow
+    const maxProductsForPrompt = isLargeCatalog ? 20 : productsToShow.length
+    const productsForPrompt = productsToShow.slice(0, maxProductsForPrompt)
+    
+    if (productsForPrompt.length > 0) {
+      contextMessage += `\n\nAVAILABLE PRODUCTS FOR RECOMMENDATIONS (${productsForPrompt.length} of ${catalogSize} total products):\n${productsForPrompt
+        .map((p: any) => {
+          const sizeInfo = p.sizes && p.sizes.length > 0 ? `, Available Sizes: ${p.sizes.join(", ")}` : ""
+          return `- ID: ${p.id}, Name: ${p.name}, Category: ${p.category}, Type: ${p.type}, Color: ${p.color}, Price: $${p.price}${sizeInfo}`
+        })
+        .join("\n")}\n`
+      
+      // Inform LLM about catalog size (for context, not for processing)
+      if (isLargeCatalog && catalogSize > productsForPrompt.length) {
+        contextMessage += `\n\nNOTE: The full catalog contains ${catalogSize} products, but only the most relevant ${productsForPrompt.length} products matching the customer's query are shown above. When recommending products, use only the products listed above.`
       }
     }
 
-    // Update system prompt for search queries
+    // Update system prompt based on query intent and results
     let systemPrompt = SYSTEM_PROMPT
-    if (isSearchQuery && filteredProducts.length > 0) {
-      systemPrompt += `\n\nIMPORTANT: The customer asked for products matching specific criteria. ${filteredProducts.length} product(s) were found matching their query. When responding, mention the filtered products and use the PRODUCT_RECOMMENDATION format for each matching product.`
-    } else if (isSearchQuery && filteredProducts.length === 0) {
-      systemPrompt += `\n\nIMPORTANT: The customer asked for products matching specific criteria, but no products were found matching their exact query. Politely inform them that no products match their criteria, but suggest similar products or ask if they'd like to adjust their search.`
+    if (queryIntent) {
+      if (queryIntent.intent === "search" && relevantProducts.length > 0) {
+        systemPrompt += `\n\nIMPORTANT: The customer asked for products matching specific criteria. ${relevantProducts.length} relevant product(s) were found matching their query. When responding, mention these products and use the PRODUCT_RECOMMENDATION format for each matching product.`
+      } else if (queryIntent.intent === "search" && relevantProducts.length === 0) {
+        systemPrompt += `\n\nIMPORTANT: The customer asked for products matching specific criteria, but no products were found matching their exact query. Politely inform them that no products match their criteria, but suggest similar products or ask if they'd like to adjust their search.`
+      } else if (queryIntent.intent === "recommendation") {
+        systemPrompt += `\n\nIMPORTANT: The customer is asking for product recommendations. Use the AVAILABLE PRODUCTS listed above to suggest relevant products that match their needs. Use the PRODUCT_RECOMMENDATION format for each recommendation.`
+      }
+    } else if (relevantProducts.length > 0) {
+      systemPrompt += `\n\nIMPORTANT: ${relevantProducts.length} relevant product(s) matching the customer's query are available. When recommending products, use the PRODUCT_RECOMMENDATION format for each suggestion.`
     }
 
     // Build conversation history
@@ -163,60 +237,51 @@ export async function POST(request: NextRequest) {
     const response = result.response
     const text = response.text()
 
-    // Parse product recommendations from the LLM response
-    // If we already have filtered recommendations, merge them; otherwise use LLM recommendations
-    const productRegex = /PRODUCT_RECOMMENDATION:\s*({[^}]+})/g
-    let match
-    let cleanedText = text
-    const llmRecommendations: any[] = []
+    // Extract product recommendations from LLM response
+    // This handles both PRODUCT_RECOMMENDATION JSON format and plain text mentions
+    const { cleanedText, extractedProducts: llmRecommendations } = extractProductsFromResponse(
+      text,
+      allProducts || [],
+    )
 
-    while ((match = productRegex.exec(text)) !== null) {
-      try {
-        const productData = JSON.parse(match[1])
-        // Verify the product exists in our catalog
-        if (allProducts?.some((p: any) => p.id === productData.id)) {
-          llmRecommendations.push(productData)
+    // Prioritize semantically retrieved products if available
+    // Otherwise use LLM-extracted recommendations
+    // If both exist, merge them (prefer semantic for duplicates)
+    const finalRecommendations: any[] = []
+
+    if (relevantProducts.length > 0 && recommendations.length > 0) {
+      // Add semantic recommendations first
+      finalRecommendations.push(...recommendations)
+      
+      // Add LLM recommendations that aren't already included
+      for (const llmRec of llmRecommendations) {
+        if (!finalRecommendations.some((r) => r.id === llmRec.id)) {
+          finalRecommendations.push(llmRec)
         }
-        // Remove the recommendation marker from the text
-        cleanedText = cleanedText.replace(match[0], "")
-      } catch (e) {
-        console.error("Failed to parse product recommendation:", e)
       }
+    } else {
+      // Use LLM recommendations if no semantic recommendations
+      finalRecommendations.push(...llmRecommendations)
     }
-
-    // If we have filtered products from search query, prioritize them
-    // Otherwise use LLM recommendations
-    const finalRecommendations =
-      isSearchQuery && recommendations.length > 0
-        ? recommendations // Use programmatically filtered products
-        : llmRecommendations // Use LLM recommendations
 
     return NextResponse.json({
       message: cleanedText.trim(),
       recommendations: finalRecommendations,
     })
   } catch (error: any) {
-    console.error("Chat API Error:", error)
-
-    // Handle quota exceeded errors
-    if (error.message?.includes("quota") || error.message?.includes("429")) {
-      return NextResponse.json(
-        {
-          error: "API quota exceeded",
-          details:
-            "The Google Gemini API quota has been exceeded. Please check your API plan and billing details at https://aistudio.google.com/",
-          errorType: "QUOTA_EXCEEDED",
-        },
-        { status: 429 },
-      )
+    logger.error("Chat API Error", { error: error.message })
+    const sanitizedError = sanitizeErrorForClient(error)
+    
+    // Determine appropriate status code based on error type
+    let statusCode = 500
+    if (sanitizedError.errorType === "RATE_LIMIT_EXCEEDED") {
+      statusCode = 429
+    } else if (sanitizedError.errorType === "VALIDATION_ERROR") {
+      statusCode = 400
+    } else if (sanitizedError.errorType === "REQUEST_TIMEOUT") {
+      statusCode = 504
     }
-
-    return NextResponse.json(
-      {
-        error: "Failed to process chat message",
-        details: error.message || "Unknown error occurred",
-      },
-      { status: 500 },
-    )
+    
+    return NextResponse.json(sanitizedError, { status: statusCode })
   }
 }

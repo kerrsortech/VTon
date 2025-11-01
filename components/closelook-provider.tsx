@@ -12,6 +12,8 @@ interface CloselookContextValue {
   config: CloselookConfig
   isEnabled: boolean
   setIsEnabled: (enabled: boolean) => void
+  generatingProductId: string | null
+  setGeneratingProductId: (productId: string | null) => void
 }
 
 const CloselookContext = createContext<CloselookContextValue | undefined>(undefined)
@@ -24,6 +26,7 @@ interface CloselookProviderProps {
 export function CloselookProvider({ children, config = {} }: CloselookProviderProps) {
   const [tryOnResults, setTryOnResults] = useState<Map<string, TryOnResult>>(new Map())
   const [isEnabled, setIsEnabled] = useState(true)
+  const [generatingProductId, setGeneratingProductId] = useState<string | null>(null)
 
   const addTryOnResult = (productId: string, result: TryOnResult) => {
     setTryOnResults((prev) => new Map(prev).set(productId, result))
@@ -56,6 +59,8 @@ export function CloselookProvider({ children, config = {} }: CloselookProviderPr
         config,
         isEnabled,
         setIsEnabled,
+        generatingProductId,
+        setGeneratingProductId,
       }}
     >
       {children}

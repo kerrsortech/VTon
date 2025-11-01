@@ -5,6 +5,7 @@ import {
   buildEnhancedProductDescription,
   enhancePromptWithPageAnalysis,
 } from "@/lib/product-page-analyzer"
+import { logger, sanitizeErrorForClient } from "@/lib/server-logger"
 
 async function convertImageToBase64(file: File): Promise<string> {
   try {
@@ -13,13 +14,13 @@ async function convertImageToBase64(file: File): Promise<string> {
     const base64 = buffer.toString("base64")
     return `data:${file.type || "image/jpeg"};base64,${base64}`
   } catch (error) {
-    console.error("[v0] Error converting image:", error)
+    logger.error("Error converting image", { error })
     throw new Error("Failed to convert image")
   }
 }
 
 export async function POST(request: NextRequest) {
-  console.log("[v0] Product analysis started")
+  logger.info("Product analysis started")
 
   try {
     const formData = await request.formData()
@@ -28,53 +29,50 @@ export async function POST(request: NextRequest) {
     const productUrl = formData.get("productUrl") as string | null
 
     if (!userPhoto || !productImage) {
-      console.log("[v0] Error: User photo or product image missing")
+      logger.warn("User photo or product image missing")
       return NextResponse.json({ error: "Both user photo and product image are required" }, { status: 400 })
     }
 
     // Optional: Analyze product page URL for enhanced product understanding
     let pageAnalysis = null
     if (productUrl && productUrl.trim().length > 0 && productUrl.startsWith("http")) {
-      console.log("[v0] Product page URL provided, analyzing page:", productUrl)
+      logger.debug("Product page URL provided", { productUrl })
       try {
         const apiKey = process.env.GOOGLE_GEMINI_API_KEY
         if (apiKey) {
           // Analyze product page in parallel with image analysis
           pageAnalysis = await analyzeProductPage(productUrl, apiKey).catch((error) => {
-            console.warn("[v0] Product page analysis failed, continuing without it:", error)
+            logger.warn("Product page analysis failed, continuing without it", { error })
             return null
           })
 
           if (pageAnalysis) {
-            console.log("[v0] Product page analysis successful")
+            logger.debug("Product page analysis successful")
           }
         }
       } catch (error) {
-        console.warn("[v0] Error during product page analysis, continuing without it:", error)
+        logger.warn("Error during product page analysis, continuing without it", { error })
       }
     }
 
-    console.log("[v0] User photo received:", userPhoto.name, userPhoto.type, userPhoto.size, "bytes")
-    console.log("[v0] Product image received:", productImage.name, productImage.type, productImage.size, "bytes")
+    logger.debug("Processing images", { userPhotoName: userPhoto.name, productImageName: productImage.name })
 
     const apiKey = process.env.GOOGLE_GEMINI_API_KEY
     if (!apiKey) {
-      console.log("[v0] Error: API key not configured")
+      logger.error("AI Engine configuration missing")
       return NextResponse.json(
         {
-          error: "Google Gemini API key not configured",
+          error: "Configuration error",
         },
         { status: 500 },
       )
     }
 
-    console.log("[v0] Initializing Google Gemini client")
     const ai = new GoogleGenAI({ apiKey })
 
-    console.log("[v0] Converting images to base64")
+    logger.debug("Converting images to base64")
     const userPhotoDataUrl = await convertImageToBase64(userPhoto)
     const productImageDataUrl = await convertImageToBase64(productImage)
-    console.log("[v0] Images converted")
 
     const systemMessage = `Return ONLY a single JSON object with keys: "productCategory","detailedVisualDescription","imageGenerationPrompt","cameraHint","productScaleCategory","productScaleRatioToHead","requiresFullBodyReconstruction","userCharacteristics","forcePoseChange","targetFraming","backgroundInstruction","positivePrompt","negativePrompt". If uncertain, use exactly "Unknown". Do NOT add any other text.`
 
@@ -160,6 +158,8 @@ Rules and details to produce:
   "faceWidthToHeightRatio": "approx numeric ratio or 'Unknown'"
 }
 
+CRITICAL: The genderHint field is extremely important for accurate image generation. Analyze facial features, bone structure, and other visible characteristics to determine if the person appears male or female. Only use "unknown" if truly impossible to determine. This will be used to generate anatomically correct and realistic person in the try-on image.
+
 9) forcePoseChange & targetFraming (DETERMINISTIC, based on PRODUCT IMAGE - second image):
  - forcePoseChange: true  // ALWAYS true: generator MUST change pose, angle, clothing, background as needed.
  - targetFraming: a single value chosen from { "full-body", "three-quarter", "upper-body", "head-and-shoulders", "mid-shot" } depending on productCategory. Rules:
@@ -186,7 +186,7 @@ Important: use plain factual language only. If uncertain about gender, color nam
 
 REMEMBER: Analyze USER PHOTO (first image) for userCharacteristics, and PRODUCT IMAGE (second image) for product details.`
 
-    console.log("[v0] Calling Google Gemini API for analysis with BOTH images")
+    logger.debug("Calling AI for analysis")
 
     const response = await ai.models.generateContent({
       model: "gemini-2.0-flash-exp",
@@ -216,33 +216,27 @@ REMEMBER: Analyze USER PHOTO (first image) for userCharacteristics, and PRODUCT 
       },
     })
 
-    console.log("[v0] Gemini API response received")
+    logger.debug("AI response received")
 
     const analysisText = response.text || ""
-    console.log("[v0] Analysis text:", analysisText)
 
     const jsonMatch = analysisText.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {
-      console.log("[v0] Error: Failed to parse JSON from response")
-      console.log("[v0] Raw response:", analysisText)
+      logger.error("Failed to parse JSON from response")
       return NextResponse.json(
         {
           error: "Failed to parse product analysis",
-          rawResponse: analysisText,
         },
         { status: 500 },
       )
     }
 
     let productMetadata = JSON.parse(jsonMatch[0])
-    console.log("[v0] Product metadata extracted:")
-    console.log("[v0] - Category:", productMetadata.productCategory)
-    console.log("[v0] - Detailed Description:", productMetadata.detailedVisualDescription)
-    console.log("[v0] - Image Generation Prompt:", productMetadata.imageGenerationPrompt)
+    logger.debug("Product metadata extracted", { category: productMetadata.productCategory })
 
     // Enhance product description with page analysis if available
     if (pageAnalysis) {
-      console.log("[v0] Enhancing product description with page analysis")
+      logger.debug("Enhancing product description with page analysis")
       const originalDescription = productMetadata.detailedVisualDescription || ""
       productMetadata.detailedVisualDescription = buildEnhancedProductDescription(originalDescription, pageAnalysis)
       
@@ -261,19 +255,7 @@ REMEMBER: Analyze USER PHOTO (first image) for userCharacteristics, and PRODUCT 
         materials: pageAnalysis.materials,
         keyFeatures: pageAnalysis.keyFeatures,
       }
-
-      console.log("[v0] Product description enhanced with page analysis")
     }
-    console.log("[v0] - Camera Hint:", productMetadata.cameraHint)
-    console.log("[v0] - Product Scale Category:", productMetadata.productScaleCategory)
-    console.log("[v0] - Product Scale Ratio To Head:", productMetadata.productScaleRatioToHead)
-    console.log("[v0] - Requires Full Body Reconstruction:", productMetadata.requiresFullBodyReconstruction)
-    console.log("[v0] - User Characteristics:", JSON.stringify(productMetadata.userCharacteristics))
-    console.log("[v0] - Force Pose Change:", productMetadata.forcePoseChange)
-    console.log("[v0] - Target Framing:", productMetadata.targetFraming)
-    console.log("[v0] - Background Instruction:", productMetadata.backgroundInstruction)
-    console.log("[v0] - Positive Prompt:", productMetadata.positivePrompt)
-    console.log("[v0] - Negative Prompt:", productMetadata.negativePrompt)
 
     const validation = {
       hasUnknownValues:
@@ -288,10 +270,10 @@ REMEMBER: Analyze USER PHOTO (first image) for userCharacteristics, and PRODUCT 
     }
 
     if (validation.hasUnknownValues) {
-      console.log("[v0] Warning: Gemini returned Unknown values")
+      logger.warn("AI returned Unknown values")
     }
     if (validation.promptLength < 100) {
-      console.log("[v0] Warning: Image generation prompt is too short")
+      logger.warn("Image generation prompt is too short")
     }
 
     return NextResponse.json({
@@ -306,13 +288,18 @@ REMEMBER: Analyze USER PHOTO (first image) for userCharacteristics, and PRODUCT 
         : null,
     })
   } catch (error) {
-    console.error("[v0] Error analyzing product:", error)
-    return NextResponse.json(
-      {
-        error: "Failed to analyze product image",
-        details: error instanceof Error ? error.message : "Unknown error",
-      },
-      { status: 500 },
-    )
+    logger.error("Error analyzing product", { error: error instanceof Error ? error.message : "Unknown error" })
+    const sanitizedError = sanitizeErrorForClient(error)
+    
+    let statusCode = 500
+    if (sanitizedError.errorType === "RATE_LIMIT_EXCEEDED") {
+      statusCode = 429
+    } else if (sanitizedError.errorType === "VALIDATION_ERROR") {
+      statusCode = 400
+    } else if (sanitizedError.errorType === "REQUEST_TIMEOUT") {
+      statusCode = 504
+    }
+    
+    return NextResponse.json(sanitizedError, { status: statusCode })
   }
 }

@@ -42,13 +42,28 @@ export function ProductChatbot({ currentProduct, allProducts, className }: Produ
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollAreaRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // Auto-scroll to bottom when messages change or loading state changes
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [messages])
+    // Use setTimeout to ensure DOM has updated
+    const scrollTimeout = setTimeout(() => {
+      // Try to scroll the inner scroll container (ScrollArea component)
+      if (scrollAreaRef.current) {
+        const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement
+        if (scrollContainer) {
+          scrollContainer.scrollTop = scrollContainer.scrollHeight
+        }
+      }
+      // Fallback to direct scroll
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      }
+    }, 100)
+
+    return () => clearTimeout(scrollTimeout)
+  }, [messages, isLoading])
 
   useEffect(() => {
     if (isOpen && inputRef.current) {
@@ -145,7 +160,8 @@ export function ProductChatbot({ currentProduct, allProducts, className }: Produ
   return (
     <>
       {/* Chat Button - positioned above the upload widget */}
-      <div className={cn("fixed bottom-28 right-6 z-50", className)}>
+      {/* Upload widget: bottom-6 (24px) + h-16 (64px) = top at 88px + 12px gap = 100px */}
+      <div className={cn("fixed bottom-[100px] right-6 z-50", className)}>
         <Button
           size="lg"
           onClick={() => setIsOpen(!isOpen)}
@@ -157,7 +173,7 @@ export function ProductChatbot({ currentProduct, allProducts, className }: Produ
 
       {/* Chat Window */}
       {isOpen && (
-        <Card className="fixed bottom-44 right-6 z-50 w-[90vw] max-w-md max-h-[600px] h-[calc(100vh-12rem)] shadow-2xl flex flex-col overflow-hidden p-0">
+        <Card className="fixed bottom-[180px] right-6 z-50 w-[90vw] max-w-md max-h-[600px] h-[calc(100vh-12rem)] shadow-2xl flex flex-col overflow-hidden p-0">
           {/* Header */}
           <div className="border-b border-border bg-primary text-primary-foreground rounded-t-lg flex-shrink-0">
             <div className="flex items-center gap-2 p-4">
@@ -171,7 +187,7 @@ export function ProductChatbot({ currentProduct, allProducts, className }: Produ
 
           {/* Messages */}
           <div className="flex-1 overflow-hidden">
-            <ScrollArea className="h-full">
+            <ScrollArea className="h-full" ref={scrollAreaRef}>
               <div className="p-4 space-y-4" ref={scrollRef}>
                 {messages.map((message, index) => (
                   <div key={index} className={cn("flex", message.role === "user" ? "justify-end" : "justify-start")}>

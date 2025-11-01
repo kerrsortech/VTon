@@ -20,8 +20,9 @@ interface ProductViewProps {
 export function ProductView({ product }: ProductViewProps) {
   const [selectedImageIndex, setSelectedImageIndex] = useState(0)
   const [viewMode, setViewMode] = useState<"model" | "user">("model")
-  const { addTryOnResult, getTryOnResult } = useCloselook()
+  const { addTryOnResult, getTryOnResult, generatingProductId } = useCloselook()
   const tryOnResult = getTryOnResult(product.id)
+  const isGenerating = generatingProductId === product.id
 
   const handleTryOnComplete = (result: TryOnResult) => {
     addTryOnResult(product.id, result)
@@ -45,6 +46,9 @@ export function ProductView({ product }: ProductViewProps) {
               <button className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
                 <Heart className="h-6 w-6" />
               </button>
+              <Link href="/profile" className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
+                <User className="h-6 w-6" />
+              </Link>
               <button className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
                 <ShoppingBag className="h-6 w-6" />
               </button>
@@ -83,14 +87,16 @@ export function ProductView({ product }: ProductViewProps) {
             )}
 
             {/* Main Image */}
-            <div className="bg-neutral-100 aspect-square relative overflow-hidden">
+            <div className={`bg-neutral-100 aspect-square relative overflow-hidden rounded-lg transition-all duration-300 ${
+              isGenerating ? "glow-animation" : ""
+            }`}>
               <img
                 src={displayImages[selectedImageIndex] || "/placeholder.svg"}
                 alt={product.name}
                 className="w-full h-full object-cover"
               />
               {viewMode === "user" && tryOnResult && (
-                <Badge className="absolute top-4 left-4 bg-black text-white">
+                <Badge className="absolute top-4 left-4 bg-black text-white z-10">
                   <User className="h-3 w-3 mr-1" />
                   Your Try-On
                 </Badge>
