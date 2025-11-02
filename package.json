@@ -7,8 +7,9 @@
     "dev:port": "next dev -p",
     "dev:dashboard": "PORT=3001 next dev",
     "dashboard": "./scripts/run-dashboard.sh",
-    "build": "next build",
-    "build:widgets": "cd widgets/chatbot-widget && npm run build && cd ../try-on-widget && npm run build",
+    "build": "npm run build:widgets && next build",
+    "build:widgets": "cd widgets/chatbot-widget && npm install && npm run build && cd ../try-on-widget && npm install && npm run build",
+    "prebuild": "npm run build:widgets",
     "start": "next start",
     "db:migrate": "node scripts/migrate-db.js",
     "db:init": "node scripts/init-db.js"

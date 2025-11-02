@@ -76,13 +76,29 @@ export const shopify = new Proxy({} as ReturnType<typeof shopifyApi>, {
  * Generate OAuth authorization URL
  */
 export function getAuthUrl(shop: string, redirectPath = "/api/shopify/auth/oauth"): string {
-  return shop.auth.begin({
-    shop,
-    callbackPath: redirectPath,
-    isOnline: false,
-    rawRequest: undefined,
-    rawResponse: undefined,
-  })
+  const apiKey = process.env.SHOPIFY_API_KEY
+  if (!apiKey) {
+    throw new Error("SHOPIFY_API_KEY environment variable is required")
+  }
+
+  const hostName = process.env.SHOPIFY_APP_URL || process.env.VERCEL_URL || process.env.RENDER_EXTERNAL_URL || "localhost:3000"
+  const hostScheme = hostName.includes("localhost") ? "http" : "https"
+  const cleanHostName = hostName.replace(/https?:\/\//, "")
+  const fullHost = `${hostScheme}://${cleanHostName}`
+  
+  // Construct OAuth URL manually for more reliable server-side installations
+  const redirectUri = `${fullHost}${redirectPath}`
+  const scopes = (process.env.SHOPIFY_SCOPES || "read_products,read_content,read_orders,read_customers,write_customers")
+    .split(",")
+    .map(s => s.trim())
+    .join(",")
+  
+  const oauthUrl = new URL(`https://${shop}/admin/oauth/authorize`)
+  oauthUrl.searchParams.set("client_id", apiKey)
+  oauthUrl.searchParams.set("scope", scopes)
+  oauthUrl.searchParams.set("redirect_uri", redirectUri)
+  
+  return oauthUrl.toString()
 }
 
 /**

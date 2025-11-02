@@ -141,6 +141,30 @@ Once installed, store owners can:
 
 ## 🔧 Troubleshooting
 
+### "Failed to initiate OAuth flow" Error
+
+If you see this error when clicking "Install App":
+
+1. **Check Environment Variables**
+   - Ensure `SHOPIFY_API_KEY` is set in your Render environment
+   - Ensure `SHOPIFY_API_SECRET` is set in your Render environment
+   - Ensure `SHOPIFY_APP_URL` or `RENDER_EXTERNAL_URL` is set to your deployed URL
+   - In Render dashboard: Environment → Environment Variables
+
+2. **Verify Shop Parameter**
+   - Ensure the URL includes a valid shop parameter: `/install?shop=your-store.myshopify.com`
+   - The shop must end with `.myshopify.com`
+   - Example: `https://vton-1-hqmc.onrender.com/install?shop=your-dev-store.myshopify.com`
+
+3. **Check App Configuration**
+   - Verify your app is created in Shopify Partners Dashboard
+   - Ensure API credentials match between Render and Partners Dashboard
+   - Check that the App URL in Partners Dashboard matches your Render URL
+
+4. **Review Logs**
+   - Check Render logs for detailed error messages
+   - The error response will now include more specific details about what failed
+
 ### OAuth Redirect Errors
 
 If you see "Redirect URI mismatch":

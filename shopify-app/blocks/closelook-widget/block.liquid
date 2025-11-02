@@ -10,7 +10,7 @@
     data-product-id="{{ product.id }}"
     data-product-handle="{{ product.handle }}"
     data-widget-position="{{ block.settings.position }}"
-    data-api-url="{{ block.settings.api_url | default: 'https://your-app.onrender.com/api' }}"
+    data-api-url="{{ block.settings.api_url | default: 'https://vton-1-hqmc.onrender.com/api' }}"
   >
     {% comment %} Widget will be injected here {% endcomment %}
   </div>
@@ -105,7 +105,7 @@
     }
 
     // Load widget bundle
-    const apiUrl = widgetContainer.dataset.apiUrl || 'https://your-app.onrender.com/api';
+    const apiUrl = widgetContainer.dataset.apiUrl || 'https://vton-1-hqmc.onrender.com/api';
     const widgetUrl = apiUrl.replace('/api', '') + '/widgets/try-on-widget.js';
     
     // Check if widget is already loaded

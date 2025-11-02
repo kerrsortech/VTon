@@ -22,8 +22,8 @@
       "type": "text",
       "id": "api_url",
       "label": "API URL",
-      "info": "Your Closelook backend API URL (e.g., https://your-app.onrender.com/api)",
-      "default": "https://your-app.onrender.com/api"
+      "info": "Your Closelook backend API URL",
+      "default": "https://vton-1-hqmc.onrender.com/api"
     }
   ]
 }
