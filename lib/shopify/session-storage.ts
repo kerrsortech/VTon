@@ -5,6 +5,7 @@
 
 import type { ShopifySession } from "./types"
 import { SignJWT, jwtVerify } from "jose"
+import { logger } from "../server-logger"
 
 const JWT_SECRET = process.env.SHOPIFY_SESSION_SECRET || process.env.SHOPIFY_API_SECRET || "default-secret-change-in-production"
 
@@ -27,7 +28,7 @@ export async function storeSession(session: ShopifySession): Promise<void> {
       // For now, store it as-is
     })
   } catch (error) {
-    console.error("Error storing session:", error)
+    logger.error("Error storing session", { error: error instanceof Error ? error.message : String(error) })
     throw error
   }
 }

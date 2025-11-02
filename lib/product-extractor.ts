@@ -5,6 +5,7 @@
  */
 
 import type { Product } from "./closelook-types"
+import { logger } from "./server-logger"
 
 export interface ExtractedProduct {
   id: string
@@ -46,7 +47,7 @@ export function extractProductsFromResponse(
       // Remove the recommendation marker from the text
       cleanedText = cleanedText.replace(match[0], "")
     } catch (e) {
-      console.error("[ProductExtractor] Failed to parse PRODUCT_RECOMMENDATION:", e)
+      logger.debug("Failed to parse PRODUCT_RECOMMENDATION", { error: e instanceof Error ? e.message : String(e) })
     }
   }
 

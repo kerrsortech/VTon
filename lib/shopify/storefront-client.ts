@@ -3,6 +3,8 @@
  * Used when customer is logged in on the Shopify storefront
  */
 
+import { logger } from "../server-logger"
+
 export interface CustomerInfo {
   id: string
   email: string
@@ -59,7 +61,7 @@ export async function fetchCustomerFromStorefront(
     const data = await response.json()
     return data.data?.customer || null
   } catch (error) {
-    console.error("Failed to fetch customer from storefront:", error)
+    logger.debug("Failed to fetch customer from storefront", { error: error instanceof Error ? error.message : String(error) })
     return null
   }
 }
@@ -152,7 +154,7 @@ export async function fetchCustomerOrdersFromStorefront(
 
     return customer.orders.edges.map((edge: any) => edge.node)
   } catch (error) {
-    console.error("Failed to fetch customer orders from storefront:", error)
+    logger.debug("Failed to fetch customer orders from storefront", { error: error instanceof Error ? error.message : String(error) })
     return []
   }
 }

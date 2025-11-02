@@ -3,6 +3,8 @@
  * Checks for customer information in Shopify storefront context
  */
 
+import { logger } from "../server-logger"
+
 export interface DetectedCustomer {
   name?: string // Customer name for personalization (e.g., "John" or "John Doe")
   isLoggedIn: boolean
@@ -91,7 +93,7 @@ export function detectShopifyCustomer(): DetectedCustomer {
 
     return { isLoggedIn: false }
   } catch (error) {
-    console.warn("Error detecting Shopify customer:", error)
+    logger.debug("Error detecting Shopify customer", { error: error instanceof Error ? error.message : String(error) })
     return { isLoggedIn: false }
   }
 }

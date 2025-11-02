@@ -31,7 +31,7 @@ export async function OPTIONS(request: NextRequest) {
 
 // Validate API key on startup
 if (!process.env.GOOGLE_GEMINI_API_KEY) {
-  console.warn("[PRODUCTION] GOOGLE_GEMINI_API_KEY is not set. Chat functionality will be limited.")
+  logger.warn("GOOGLE_GEMINI_API_KEY is not set. Chat functionality will be limited.")
 }
 
 // Build system prompt with customer name if available
@@ -195,7 +195,7 @@ export async function POST(request: NextRequest) {
         // Extract query intent first (helps determine how many products to retrieve)
         if (apiKey) {
           queryIntent = await extractQueryIntent(message, apiKey).catch((error) => {
-            console.warn("[Chat] Intent extraction failed, using fallback:", error)
+            logger.warn("Intent extraction failed, using fallback", { error: error instanceof Error ? error.message : String(error) })
             return null
           })
         }
@@ -211,9 +211,7 @@ export async function POST(request: NextRequest) {
           apiKey: apiKey,
         })
 
-        console.log(
-          `[Chat] Retrieved ${relevantProducts.length} relevant products from catalog of ${catalogSize} products`,
-        )
+        logger.debug(`Retrieved ${relevantProducts.length} relevant products from catalog of ${catalogSize} products`)
 
         // Convert to recommendations format
         if (relevantProducts.length > 0) {
@@ -225,7 +223,7 @@ export async function POST(request: NextRequest) {
           }))
         }
       } catch (error) {
-        console.error("[Chat] Error in semantic search, falling back to simple filter:", error)
+        logger.warn("Error in semantic search, falling back to simple filter", { error: error instanceof Error ? error.message : String(error) })
         // Fallback to simple filter
         relevantProducts = smartFilterProducts(allProducts as Product[], message).slice(0, 20)
       }

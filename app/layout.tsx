@@ -6,7 +6,13 @@ import { CloselookProvider } from "@/components/closelook-provider"
 import { Toaster } from "@/components/ui/toaster"
 import "./globals.css"
 import { Suspense } from "react"
-import { ChatbotWrapper } from "@/components/chatbot-wrapper"
+import dynamic from "next/dynamic"
+
+// Dynamically import ChatbotWrapper to reduce initial bundle size
+const ChatbotWrapper = dynamic(() => import("@/components/chatbot-wrapper"), {
+  ssr: false,
+  loading: () => null // Don't show loading state
+})
 
 const inter = Inter({
   subsets: ["latin"],

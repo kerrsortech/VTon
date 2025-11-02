@@ -13,6 +13,7 @@
 import type { Product } from "./closelook-types"
 import { smartFilterProducts } from "./product-filter"
 import { GoogleGenAI } from "@google/genai"
+import { logger } from "./server-logger"
 
 export interface QueryIntent {
   intent: "search" | "recommendation" | "question" | "comparison"
@@ -90,7 +91,7 @@ Return ONLY the JSON object, no other text.`
       return intent
     }
   } catch (error) {
-    console.error("[SemanticSearch] Error extracting intent, using fallback:", error)
+    logger.warn("Error extracting intent, using fallback", { error: error instanceof Error ? error.message : String(error) })
   }
 
   // Fallback to simple parsing
@@ -246,7 +247,7 @@ export async function retrieveRelevantProducts(
     try {
       intent = await extractQueryIntent(userQuery, apiKey)
     } catch (error) {
-      console.warn("[SemanticSearch] Intent extraction failed, using fallback:", error)
+      logger.warn("Intent extraction failed, using fallback", { error: error instanceof Error ? error.message : String(error) })
       intent = parseQueryIntentFallback(userQuery)
     }
   } else {

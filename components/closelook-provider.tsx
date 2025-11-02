@@ -1,6 +1,6 @@
 "use client"
 
-import React, { createContext, useContext, useState, type ReactNode } from "react"
+import React, { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from "react"
 import type { TryOnResult, CloselookConfig } from "@/lib/closelook-types"
 
 interface UserImages {
@@ -36,43 +36,43 @@ export function CloselookProvider({ children, config = {} }: CloselookProviderPr
   const [isEnabled, setIsEnabled] = useState(true)
   const [generatingProductId, setGeneratingProductId] = useState<string | null>(null)
 
-  const addTryOnResult = (productId: string, result: TryOnResult) => {
+  const addTryOnResult = useCallback((productId: string, result: TryOnResult) => {
     setTryOnResults((prev) => new Map(prev).set(productId, result))
-  }
+  }, [])
 
-  const getTryOnResult = (productId: string) => {
+  const getTryOnResult = useCallback((productId: string) => {
     return tryOnResults.get(productId)
-  }
+  }, [tryOnResults])
 
-  const clearTryOnResult = (productId: string) => {
+  const clearTryOnResult = useCallback((productId: string) => {
     setTryOnResults((prev) => {
       const next = new Map(prev)
       next.delete(productId)
       return next
     })
-  }
+  }, [])
 
-  const clearAllResults = () => {
+  const clearAllResults = useCallback(() => {
     setTryOnResults(new Map())
-  }
+  }, [])
+
+  const contextValue = useMemo(() => ({
+    tryOnResults,
+    addTryOnResult,
+    getTryOnResult,
+    clearTryOnResult,
+    clearAllResults,
+    userImages,
+    setUserImages,
+    config,
+    isEnabled,
+    setIsEnabled,
+    generatingProductId,
+    setGeneratingProductId,
+  }), [tryOnResults, addTryOnResult, getTryOnResult, clearTryOnResult, clearAllResults, userImages, config, isEnabled, generatingProductId])
 
   return (
-    <CloselookContext.Provider
-      value={{
-        tryOnResults,
-        addTryOnResult,
-        getTryOnResult,
-        clearTryOnResult,
-        clearAllResults,
-        userImages,
-        setUserImages,
-        config,
-        isEnabled,
-        setIsEnabled,
-        generatingProductId,
-        setGeneratingProductId,
-      }}
-    >
+    <CloselookContext.Provider value={contextValue}>
       {children}
     </CloselookContext.Provider>
   )

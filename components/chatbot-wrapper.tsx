@@ -1,32 +1,23 @@
 "use client"
 
+import React, { useMemo } from "react"
 import { usePathname } from "next/navigation"
-import { useState, useEffect } from "react"
 import { GlobalChatbot } from "@/components/global-chatbot"
-import type { Product } from "@/lib/closelook-types"
 
-export function ChatbotWrapper() {
+function ChatbotWrapper() {
   const pathname = usePathname()
-  const [products, setProducts] = useState<Product[]>([])
-
-  // Fetch products using the plugin adapter via API
-  useEffect(() => {
-    async function fetchProducts() {
-      try {
-        const response = await fetch("/api/products")
-        if (response.ok) {
-          const data = await response.json()
-          setProducts(data.products || [])
-        }
-      } catch (error) {
-        console.error("Failed to fetch products:", error)
-      }
-    }
-    fetchProducts()
-  }, [])
-
-  const productId = pathname.startsWith("/product/") ? pathname.split("/product/")[1] : null
-  const currentProduct = productId ? products.find((p) => p.id === productId) : undefined
-
+  
+  // Extract product ID from pathname if we're on a product page
+  const currentProduct = useMemo(() => {
+    const productId = pathname.startsWith("/product/") ? pathname.split("/product/")[1] : null
+    return productId ? { id: productId } as any : undefined
+  }, [pathname])
+  
+  // GlobalChatbot will handle product fetching internally
+  // No need to fetch products here to avoid duplicate API calls
   return <GlobalChatbot currentProduct={currentProduct} />
 }
+
+// Export with React.memo to prevent unnecessary re-renders
+export default React.memo(ChatbotWrapper)
+export { ChatbotWrapper }

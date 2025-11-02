@@ -71,8 +71,10 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
   
   const { setGeneratingProductId, userImages, setUserImages } = useCloselook()
 
-  // Fetch products using the plugin adapter via API
+  // Fetch products only when chatbot is opened for the first time
   useEffect(() => {
+    if (!hasClickedOnce) return // Only fetch when user interacts
+    
     async function fetchProducts() {
       try {
         const response = await fetch("/api/products")
@@ -85,7 +87,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       }
     }
     fetchProducts()
-  }, [])
+  }, [hasClickedOnce])
 
   useEffect(() => {
     // Initialize with greeting message
