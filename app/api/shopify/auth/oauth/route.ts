@@ -91,9 +91,12 @@ export async function GET(request: NextRequest) {
     logger.info("Shopify OAuth completed successfully", { shop })
 
     // Redirect to admin dashboard
-    const adminUrl = new URL("/admin", request.url)
-    adminUrl.searchParams.set("shop", shop)
+    // Use SHOPIFY_APP_URL or construct from request headers to avoid localhost redirects
+    const appUrl = process.env.SHOPIFY_APP_URL || process.env.RENDER_EXTERNAL_URL || 
+                   `https://${request.headers.get("host") || "localhost:10000"}`
+    const adminUrl = `${appUrl}/admin?shop=${encodeURIComponent(shop)}`
     
+    logger.info("Redirecting to admin dashboard", { shop, adminUrl })
     return NextResponse.redirect(adminUrl)
   } catch (error) {
     logger.error("Shopify OAuth callback error", { error })
