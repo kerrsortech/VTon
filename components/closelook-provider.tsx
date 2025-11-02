@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useState, type ReactNode } from "react"
+import React, { createContext, useContext, useState, type ReactNode } from "react"
 import type { TryOnResult, CloselookConfig } from "@/lib/closelook-types"
 
 interface UserImages {

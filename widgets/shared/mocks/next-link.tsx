@@ -2,7 +2,7 @@
  * Mock Next.js Link component for standalone widget environment
  */
 
-import type React from "react"
+import React from "react"
 
 interface LinkProps {
   href: string
