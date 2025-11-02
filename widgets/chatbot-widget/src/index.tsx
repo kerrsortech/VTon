@@ -42,7 +42,19 @@ export function init(config: WidgetConfig) {
   
   // Override /api/* calls to use the provided API URL
   window.fetch = ((...args) => {
-    const url = typeof args[0] === "string" ? args[0] : args[0].url
+    const firstArg = args[0]
+    let url: string
+    if (typeof firstArg === "string") {
+      url = firstArg
+    } else if (firstArg instanceof Request) {
+      url = firstArg.url
+    } else if (firstArg instanceof URL) {
+      url = firstArg.toString()
+    } else {
+      // Fallback for other types
+      return originalFetch(...args)
+    }
+    
     if (url && url.startsWith("/api/")) {
       const newUrl = apiUrl + url.replace("/api", "")
       return originalFetch(newUrl, args[1])
@@ -54,10 +66,10 @@ export function init(config: WidgetConfig) {
   const root = createRoot(container)
   
   root.render(
-    React.createElement(GlobalChatbot, {
-      currentProduct: closelookProduct,
-      className: "closelook-chatbot-shopify",
-    })
+    <GlobalChatbot
+      currentProduct={closelookProduct}
+      className="closelook-chatbot-shopify"
+    />
   )
 
   // Clean up function (if needed)
