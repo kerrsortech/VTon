@@ -11,6 +11,12 @@ module.exports = {
   },
   resolve: {
     extensions: ['.ts', '.tsx', '.js', '.jsx'],
+    alias: {
+      '@': path.resolve(__dirname, '../..'),
+      // Mock Next.js modules for standalone environment
+      'next/navigation': path.resolve(__dirname, '../shared/mocks/next-navigation.ts'),
+      'next/link': path.resolve(__dirname, '../shared/mocks/next-link.tsx'),
+    },
   },
   module: {
     rules: [
@@ -19,12 +25,16 @@ module.exports = {
         use: 'ts-loader',
         exclude: /node_modules/,
       },
+      {
+        test: /\.css$/,
+        use: ['style-loader', 'css-loader'],
+      },
     ],
   },
   externals: {
-    // Exclude React from bundle (or include it for standalone)
-    // 'react': 'React',
-    // 'react-dom': 'ReactDOM',
+    // Don't externalize React/ReactDOM - bundle them
+  },
+  optimization: {
+    minimize: process.env.NODE_ENV === 'production',
   },
 };
-

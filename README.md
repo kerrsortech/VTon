@@ -1,76 +1,74 @@
-# Closelook Virtual Try-On Plugin
+# Closelook Virtual Try-On Shopify Plugin
 
-A revolutionary virtual try-on system powered by AI that creates photoreal images of customers wearing products.
+A revolutionary virtual try-on system powered by AI that creates photoreal images of customers wearing products. This is a Shopify app that can be installed in any Shopify store.
+
+## 🎉 Production Ready!
+
+**Your Closelook plugin is fully production-ready!** 
+
+**👉 [START DEPLOYING NOW →](./DEPLOY.md)**
+
+Follow the complete deployment guide to get your plugin live in under 1 hour.
 
 ## Features
 
 - **Floating Upload Widget**: Easy-to-use widget that floats on product pages
 - **AI-Powered Try-On**: Generates photoreal images using advanced AI models
+- **AI Shopping Assistant**: Chatbot for product recommendations and questions
 - **Model/User Toggle**: Switch between model photos and personalized try-on results
 - **Download & Share**: Download try-on images and share on social media
-- **Demo Store**: Complete e-commerce demo with 8 sample products
+- **Demo Store**: Complete demo website to test and see the UI
 
 ## Tech Stack
 
 - **Framework**: Next.js 15 with App Router
 - **UI**: Shadcn/ui + Tailwind CSS v4
 - **AI**: Advanced image generation and analysis models
-- **Styling**: Tailwind CSS with custom design tokens
+- **Platform**: Shopify App with theme app extensions
 
 ## Getting Started
 
 1. **Install dependencies**:
    \`\`\`bash
-   npm install
+   pnpm install
    \`\`\`
 
 2. **Set up environment variables**:
    Create a `.env.local` file in the root directory:
    \`\`\`bash
+   # Shopify App Configuration
+   SHOPIFY_API_KEY=your_shopify_api_key
+   SHOPIFY_API_SECRET=your_shopify_api_secret
+   SHOPIFY_APP_URL=http://localhost:3000
+   SHOPIFY_SCOPES=read_products,read_content
+   SHOPIFY_SESSION_SECRET=generate_a_random_secret_key
+
+   # AI Services
    REPLICATE_API_TOKEN=your_api_token_here
-   GOOGLE_GEMINI_API_KEY=your_api_key_here  # Optional: for enhanced features
+   GOOGLE_GEMINI_API_KEY=your_api_key_here
+
+   # Optional
+   ENABLE_STRUCTURED_LOGGING=true
    \`\`\`
-   
-   Contact your administrator for API credentials
 
 3. **Run the development server**:
    \`\`\`bash
-   npm run dev
+   pnpm dev
    \`\`\`
 
-4. **Open the demo store**:
-   Navigate to `http://localhost:3000`
+4. **Test the demo store**:
+   Navigate to `http://localhost:3000` to see the demo UI with chat button
 
-## Logging & Debugging
+## Deployment
 
-The application uses a secure server-side logging system that sanitizes all third-party API references.
+**📘 [Complete Deployment Guide →](./DEPLOY.md)**
 
-### Viewing Logs
+Follow the step-by-step guide in `DEPLOY.md` to deploy your plugin to Shopify stores in under 1 hour. Perfect for junior developers!
 
-**Development** (`npm run dev`):
-- Logs appear in the terminal where you run the dev server
-- Format: `[timestamp] [Closelook Server] message`
-
-**Production**:
-- Logs appear in your hosting platform's logs (Vercel, Railway, etc.)
-- Format: Same as development
-- For structured JSON logs, set `ENABLE_STRUCTURED_LOGGING=true` in your `.env.local`
-
-### Environment Variables
-
-All available environment variables:
-```bash
-REPLICATE_API_TOKEN=your_api_token_here
-GOOGLE_GEMINI_API_KEY=your_api_key_here  # Optional: for chatbot & analysis
-ENABLE_STRUCTURED_LOGGING=true           # Optional: enable JSON logging
-```
-
-### Security Features
-
-- ✅ All third-party API references are sanitized in logs
-- ✅ API keys are automatically redacted
-- ✅ Client-facing error messages are generic and secure
-- ✅ Server logs never expose sensitive implementation details
+For more detailed information:
+- Database setup: [DATABASE_SETUP.md](./DATABASE_SETUP.md)
+- Dashboard setup: [DASHBOARD_SETUP.md](./DASHBOARD_SETUP.md)
+- Production readiness: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md)
 
 ## Project Structure
 
@@ -78,24 +76,39 @@ ENABLE_STRUCTURED_LOGGING=true           # Optional: enable JSON logging
 ├── app/
 │   ├── api/
 │   │   ├── try-on/          # Main try-on generation endpoint
-│   │   ├── analyze-product/ # Product analysis endpoint
-│   │   └── generate-image/  # Generic image generation endpoint
-│   ├── product/[id]/        # Product detail pages
-│   └── page.tsx             # Homepage with product grid
+│   │   ├── chat/            # Chatbot endpoint
+│   │   ├── products/       # Products API (for demo)
+│   │   └── shopify/        # Shopify OAuth and webhooks
+│   ├── product/[id]/       # Demo product detail pages
+│   ├── admin/              # Admin dashboard for Shopify app
+│   └── page.tsx            # Demo homepage
 ├── components/
-│   ├── closelook-widget.tsx      # Floating upload widget
-│   ├── closelook-provider.tsx    # Context provider for state
+│   ├── closelook-widget.tsx      # Floating upload widget (UI for Shopify)
+│   ├── global-chatbot.tsx        # Chat button and chatbot (UI for Shopify)
 │   ├── product-view.tsx          # Product page with try-on
-│   ├── product-chatbot.tsx       # AI shopping assistant
-│   ├── try-on-actions.tsx        # Download/share functionality
 │   └── ui/                       # Shadcn UI components
+├── shopify-app/
+│   └── blocks/                   # Shopify theme app extensions
+│       ├── closelook-widget/     # Try-on widget block
+│       └── closelook-chatbot/    # Chatbot block
+├── widgets/
+│   ├── try-on-widget/            # Standalone widget bundle
+│   └── chatbot-widget/          # Standalone chatbot bundle
 └── lib/
     ├── closelook-plugin/         # Plugin architecture
-    │   ├── adapters/             # Platform adapters (Shopify, WooCommerce, etc.)
-    │   ├── types/                # TypeScript types
-    │   └── config.ts             # Plugin configuration
-    └── demo-products.ts          # Sample product data
+    │   ├── adapters/             # Platform adapters (Shopify, Demo)
+    │   └── types/                # TypeScript types
+    └── shopify/                  # Shopify integration utilities
 \`\`\`
+
+## UI Components for Shopify
+
+The following components are used in the Shopify plugin:
+
+- **CloselookWidget** (`components/closelook-widget.tsx`): The try-on widget component
+- **GlobalChatbot** (`components/global-chatbot.tsx`): The chat button and chatbot interface with integrated upload functionality
+
+These can be customized in this repository and will be reflected in the Shopify plugin UI.
 
 ## API Endpoints
 
@@ -105,189 +118,40 @@ Generates a photoreal try-on image using AI image generation.
 
 **Request (FormData)**:
 - `userPhoto`: File - User's photo
-- `productImage`: File - Product image
+- `productImage`: File[] - Product images
 - `productName`: string - Product name
 - `productCategory`: string - Product category
 
-**Response**:
+### POST /api/chat
+
+AI shopping assistant for product recommendations.
+
+**Request (JSON)**:
 \`\`\`json
 {
-  "imageUrl": "https://cdn.example.com/...",
-  "productName": "Nike ZoomX Vomero Plus",
-  "metadata": { 
-    "model": "closelook-v1", 
-    "timestamp": "...",
-    "productAnalysis": { ... }
-  }
-}
-\`\`\`
-
-### POST /api/analyze-product
-
-Analyzes product images to extract category and description using AI vision models.
-
-**Request (FormData)**:
-- `productImage`: File - Product image to analyze
-
-**Response**:
-\`\`\`json
-{
-  "success": true,
-  "metadata": {
-    "productCategory": "Running Shoes",
-    "shortDescription": "White and blue athletic running shoes..."
-  }
-}
-\`\`\`
-
-### POST /api/generate-image
-
-Generic image generation with custom prompts using AI models.
-
-**Request (FormData)**:
-- `image1`: File - First input image
-- `image2`: File - Second input image
-- `prompt`: string - Custom generation prompt
-
-**Response**:
-\`\`\`json
-{
-  "imageUrl": "https://cdn.example.com/...",
-  "metadata": { "model": "closelook-v1", "timestamp": "..." }
-}
-\`\`\`
-
-## Prompt Engineering
-
-The system uses sophisticated prompts that ensure:
-- **Facial Fidelity**: Exact preservation of facial features
-- **Skin Tone Consistency**: Uniform skin tone across all visible body parts
-- **Clothing Fit Accuracy**: Maintains original garment fit (loose/fitted)
-- **Professional Quality**: Studio-grade backgrounds and lighting
-
-Prompts are automatically customized based on product category (shoes, accessories, clothing, etc.).
-
-## Usage
-
-### Basic Integration
-
-\`\`\`tsx
-import { CloselookWidget } from "@/components/closelook-widget"
-import { CloselookProvider } from "@/components/closelook-provider"
-
-function ProductPage({ product }) {
-  return (
-    <CloselookProvider>
-      <div>
-        {/* Your product page content */}
-        <CloselookWidget 
-          product={product}
-          onTryOnComplete={(result) => console.log(result)}
-        />
-      </div>
-    </CloselookProvider>
-  )
-}
-\`\`\`
-
-### Using the Context
-
-\`\`\`tsx
-import { useCloselook } from "@/components/closelook-provider"
-
-function MyComponent() {
-  const { getTryOnResult, addTryOnResult } = useCloselook()
-  
-  const result = getTryOnResult(productId)
-  // Use the try-on result
+  "message": "Show me shoes",
+  "conversationHistory": [...],
+  "pageContext": "home|product|other",
+  "currentProduct": {...},
+  "allProducts": [...]
 }
 \`\`\`
 
 ## Plugin Architecture
 
-Closelook is built with a modular plugin architecture that supports multiple e-commerce platforms:
+Closelook uses a modular plugin architecture that supports multiple e-commerce platforms:
 
-### Supported Platforms
-- **Demo Mode**: Static product data (current implementation)
-- **Shopify**: Coming soon
-- **WooCommerce**: Coming soon
-- **Custom**: Extensible adapter system
-
-### Creating Custom Adapters
-
-\`\`\`typescript
-import { ProductAdapter } from "@/lib/closelook-plugin/adapters/base-adapter"
-
-class MyPlatformAdapter extends ProductAdapter {
-  async getProduct(id: string) {
-    // Fetch from your platform
-  }
-  
-  async getAllProducts() {
-    // Fetch all products
-  }
-}
-\`\`\`
+- **Demo Adapter**: Static product data for testing
+- **Shopify Adapter**: Real-time product data from Shopify stores
 
 See `lib/closelook-plugin/README.md` for detailed integration guides.
 
-## Deployment
+## Demo Website
 
-### Deploy to Vercel
-
-1. Push your code to GitHub
-2. Import your repository in Vercel
-3. Add the environment variables in Vercel dashboard:
-   - `REPLICATE_API_TOKEN`: Your API token
-   - `GOOGLE_GEMINI_API_KEY`: Optional, for enhanced features
-   - `ENABLE_STRUCTURED_LOGGING`: Optional, set to `true` for JSON logs
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new)
-
-### Environment Variables
-
-The app requires the following environment variables:
-
-- `REPLICATE_API_TOKEN` (required): API credentials
-- `GOOGLE_GEMINI_API_KEY` (optional): For enhanced AI features
-- `ENABLE_STRUCTURED_LOGGING` (optional): Enable structured JSON logging
-
-Contact your system administrator for API credentials.
-
-## Customization
-
-### Adding Products
-
-Edit `lib/demo-products.ts` to add or modify products:
-
-\`\`\`ts
-{
-  id: "unique-id",
-  name: "Product Name",
-  category: "Clothing|Footwear|Accessories",
-  type: "Specific Type",
-  color: "Color",
-  price: 99,
-  images: ["/path/to/image.jpg"],
-  description: "Product description"
-}
-\`\`\`
-
-### Customizing Prompts
-
-Modify the `buildDynamicTryOnPrompt` function in `app/api/try-on/route.ts` to adjust AI generation behavior.
-
-### Styling
-
-Update design tokens in `app/globals.css` to match your brand:
-
-\`\`\`css
-:root {
-  --primary: oklch(...);
-  --background: oklch(...);
-  /* etc */
-}
-\`\`\`
+The demo website (`app/page.tsx` and `app/product/[id]/page.tsx`) is kept for:
+- Testing the UI components (chat button, upload icon)
+- Visual reference for Shopify plugin UI
+- Development and debugging
 
 ## License
 

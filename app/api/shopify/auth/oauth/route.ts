@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { shopify } from "@/lib/shopify/auth"
 import { storeSession } from "@/lib/shopify/session-storage"
 import { logger } from "@/lib/server-logger"
+import { getOrCreateStore } from "@/lib/db/analytics"
 import type { ShopifySession } from "@/lib/shopify/types"
 
 /**
@@ -77,6 +78,15 @@ export async function GET(request: NextRequest) {
     }
 
     await storeSession(session)
+
+    // Create or update store record in analytics database
+    try {
+      await getOrCreateStore(shop, shop.replace(".myshopify.com", ""), accessToken)
+      logger.info("Store record created/updated", { shop })
+    } catch (error) {
+      logger.error("Failed to create store record", { shop, error })
+      // Don't fail OAuth if analytics setup fails
+    }
 
     logger.info("Shopify OAuth completed successfully", { shop })
 

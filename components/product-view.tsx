@@ -46,9 +46,9 @@ export function ProductView({ product }: ProductViewProps) {
               <button className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
                 <Heart className="h-6 w-6" />
               </button>
-              <Link href="/profile" className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
+              <button className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
                 <User className="h-6 w-6" />
-              </Link>
+              </button>
               <button className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
                 <ShoppingBag className="h-6 w-6" />
               </button>

@@ -307,16 +307,16 @@ export function getStudioBackground(categoryConfig: CategoryConfig): string {
 
   switch (categoryConfig.backgroundPriority) {
     case "product":
-      return `${baseBackground}, softbox key light from front-left, soft fill light from front-right, subtle rim light from behind to separate subject. Focus lighting on product visibility.`
+      return `${baseBackground}, cinematic soft lighting (key + fill + rim), professional setup, NO equipment visible`
 
     case "person":
-      return `${baseBackground}, softbox key light from front-left, soft fill light from front-right, gentle rim light. Even lighting across subject's face and upper body.`
+      return `${baseBackground}, cinematic soft lighting (key + fill + rim), professional setup, NO equipment visible`
 
     case "balanced":
-      return `${baseBackground}, softbox key light from front-left, soft fill light from front-right, subtle rim light to separate subject from background. Balanced lighting for both person and product.`
+      return `${baseBackground}, cinematic soft lighting (key + fill + rim), professional setup, NO equipment visible`
 
     default:
-      return `${baseBackground}, softbox key + soft fill + subtle rim light`
+      return `${baseBackground}, cinematic soft lighting (key + fill + rim), professional setup, NO equipment visible`
   }
 }
 
@@ -324,7 +324,7 @@ export function getStudioBackground(categoryConfig: CategoryConfig): string {
  * Gets enhanced negative prompt based on category type
  */
 export function getCategoryNegativePrompt(categoryType: CategoryType): string {
-  const baseNegative = "no duplicate person, no multiple people, no multiple poses, no multiple figures, no clones, no overlapping figures, no composite images, no multiple views, no extra limbs, no multiple heads, no floating body parts, no giant foreground product overlay, no child-like proportions, no cartoon style, no text, no watermark, no home interiors, no outdoor backgrounds, no double exposure, no triptych, no side-by-side figures"
+  const baseNegative = "no duplicate person, no multiple people, no multiple poses, no multiple figures, no clones, no overlapping figures, no composite images, no multiple views, no extra limbs, no multiple heads, no floating body parts, no giant foreground product overlay, no child-like proportions, no cartoon style, no text, no watermark, no home interiors, no outdoor backgrounds, no double exposure, no triptych, no side-by-side figures, no light stands, no lighting equipment, no studio equipment, no photography equipment visible"
 
   switch (categoryType) {
     case "HEADWEAR":
@@ -342,7 +342,7 @@ export function getCategoryNegativePrompt(categoryType: CategoryType): string {
       return `${baseNegative}, no misaligned jewelry, no floating accessories, ensure accessories are properly worn and positioned, only ONE person`
 
     case "ACCESSORY_CARRY":
-      return `${baseNegative}, no multiple bags, no duplicate bags, ensure ONE person carrying ONE bag correctly, bag must be properly worn/held`
+      return `${baseNegative}, no multiple bags, no duplicate bags, ensure ONE person carrying ONE bag correctly, bag must be properly worn/held based on its design type (handbag held in hand, shoulder bag on shoulder, crossbody diagonally, etc.). DO NOT add, remove, or alter handles, straps, logos, hardware, or any product features from the reference images. Preserve exact bag design, strap configuration, and all product details exactly as shown in product reference.`
 
     case "ACCESSORY_OTHER":
       return `${baseNegative}, no multiple accessories, ensure ONE person wearing ONE accessory correctly`

@@ -124,30 +124,22 @@ export async function analyzeProductPage(
     // Use Gemini to analyze the page content
     const ai = new GoogleGenAI({ apiKey })
 
-    const analysisPrompt = `You are analyzing a product page to extract detailed product information for virtual try-on image generation.
+    const analysisPrompt = `Extract product info for virtual try-on. Keep it SHORT.
 
-PRODUCT PAGE CONTENT:
-${pageContent.substring(0, 8000)}  <!-- Limited to avoid token limits -->
+PRODUCT PAGE:
+${pageContent.substring(0, 6000)}
 
-Analyze this product page and extract the following information in JSON format:
-
+Return ONLY this JSON (no extra text):
 {
-  "enhancedDescription": "Comprehensive product description (3-5 sentences) covering design, style, materials, and key visual features",
-  "productDetails": "Detailed product information including materials, construction, sizing, fit, and design details",
-  "designElements": "Specific design elements, patterns, colors, logos, and visual characteristics mentioned on the page",
-  "materials": "Materials, fabric types, hardware details, and construction methods mentioned",
-  "keyFeatures": ["feature1", "feature2", "feature3"],
-  "summary": "Concise summary (2-3 sentences) of the most important product characteristics for image generation"
+  "enhancedDescription": "ONE sentence: what it looks like visually",
+  "productDetails": "ONE sentence: key visual details",
+  "designElements": "ONE sentence: colors/patterns/logos",
+  "materials": "ONE sentence: main materials",
+  "keyFeatures": ["feature1", "feature2"],
+  "summary": "ONE sentence: key visual characteristics"
 }
 
-CRITICAL REQUIREMENTS:
-- Focus on VISUAL characteristics: colors, materials, textures, design elements, logos, hardware
-- Extract information that helps generate accurate try-on images
-- Include specific details about fit, style, and appearance
-- Note any special design elements, patterns, or distinguishing features
-- Keep descriptions concise but informative (for prompt integration)
-
-Return ONLY valid JSON, no additional text.`
+Focus: visual appearance ONLY. Keep each field to ONE sentence maximum.`
 
     logger.debug("Sending page analysis to AI")
 
@@ -160,8 +152,8 @@ Return ONLY valid JSON, no additional text.`
         },
       ],
       config: {
-        temperature: 0.3,
-        maxOutputTokens: 1024,
+        temperature: 0.2,
+        maxOutputTokens: 400,
       },
     })
 
@@ -196,36 +188,11 @@ export function buildEnhancedProductDescription(
     return baseDescription
   }
 
+  // Use only the most concise summary from page analysis
   let enhanced = baseDescription
 
-  // Add enhanced description if available
-  if (pageAnalysis.enhancedDescription) {
-    enhanced += `\n\nPRODUCT PAGE ANALYSIS:\n${pageAnalysis.enhancedDescription}`
-  }
-
-  // Add product details
-  if (pageAnalysis.productDetails) {
-    enhanced += `\n\nPRODUCT DETAILS:\n${pageAnalysis.productDetails}`
-  }
-
-  // Add design elements
-  if (pageAnalysis.designElements) {
-    enhanced += `\n\nDESIGN ELEMENTS:\n${pageAnalysis.designElements}`
-  }
-
-  // Add materials
-  if (pageAnalysis.materials) {
-    enhanced += `\n\nMATERIALS & CONSTRUCTION:\n${pageAnalysis.materials}`
-  }
-
-  // Add key features
-  if (pageAnalysis.keyFeatures && pageAnalysis.keyFeatures.length > 0) {
-    enhanced += `\n\nKEY FEATURES:\n${pageAnalysis.keyFeatures.join(", ")}`
-  }
-
-  // Add summary
   if (pageAnalysis.summary) {
-    enhanced += `\n\nSUMMARY: ${pageAnalysis.summary}`
+    enhanced += ` ${pageAnalysis.summary}`
   }
 
   return enhanced
@@ -242,15 +209,7 @@ export function enhancePromptWithPageAnalysis(
     return basePrompt
   }
 
-  // Add page analysis insights to the prompt
-  const pageInsights = `\n\nPRODUCT PAGE INSIGHTS:
-${pageAnalysis.summary}
-
-${pageAnalysis.designElements ? `Design Elements: ${pageAnalysis.designElements}` : ""}
-${pageAnalysis.materials ? `Materials: ${pageAnalysis.materials}` : ""}
-
-Use these insights to ensure the generated image accurately reflects the product's design, materials, and key features as described on the product page.`
-
-  return basePrompt + pageInsights
+  // Add concise page analysis
+  return basePrompt + ` ${pageAnalysis.summary}`
 }
 

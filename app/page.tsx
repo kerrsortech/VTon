@@ -1,9 +1,14 @@
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
-import { demoProducts } from "@/lib/demo-products"
+import { getCloselookPlugin } from "@/lib/closelook-plugin"
 import { Search, Heart, ShoppingBag, User } from "lucide-react"
 
-export default function HomePage() {
+export default async function HomePage() {
+  // Use the plugin adapter (currently using demo adapter, but demonstrates Shopify adapter pattern)
+  const plugin = getCloselookPlugin()
+  const adapter = plugin.getAdapter()
+  const products = await adapter.getAllProducts()
+
   return (
     <div className="min-h-screen bg-white">
       {/* Top Utility Bar */}
@@ -72,9 +77,9 @@ export default function HomePage() {
               <button className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
                 <Heart className="h-6 w-6" />
               </button>
-              <Link href="/profile" className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
+              <button className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
                 <User className="h-6 w-6" />
-              </Link>
+              </button>
               <button className="p-2 hover:bg-neutral-100 rounded-full transition-colors">
                 <ShoppingBag className="h-6 w-6" />
               </button>
@@ -121,7 +126,7 @@ export default function HomePage() {
         <div className="container mx-auto px-6">
           <h2 className="text-2xl font-bold mb-8">Shop The Classics</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {demoProducts.slice(0, 8).map((product) => (
+            {products.map((product) => (
               <Link key={product.id} href={`/product/${product.id}`} className="group">
                 <div className="bg-neutral-100 aspect-square mb-4 overflow-hidden">
                   <img

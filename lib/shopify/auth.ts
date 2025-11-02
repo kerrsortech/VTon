@@ -7,7 +7,12 @@ import "@shopify/shopify-api/adapters/node"
 
 const apiKey = process.env.SHOPIFY_API_KEY || ""
 const apiSecret = process.env.SHOPIFY_API_SECRET || ""
-const scopes = (process.env.SHOPIFY_SCOPES || "read_products,read_content").split(",")
+// Required scopes: 
+// - read_products, read_content (for product catalog)
+// - read_orders, read_customers (for order history and customer info)
+// - write_customers (for creating customer notes/tickets)
+// Example: SHOPIFY_SCOPES=read_products,read_content,read_orders,read_customers,write_customers
+const scopes = (process.env.SHOPIFY_SCOPES || "read_products,read_content,read_orders,read_customers,write_customers").split(",")
 const hostName = process.env.SHOPIFY_APP_URL || process.env.VERCEL_URL || "localhost:3000"
 const hostScheme = hostName.includes("localhost") ? "http" : "https"
 const host = `${hostScheme}://${hostName}`

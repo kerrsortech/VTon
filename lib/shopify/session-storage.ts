@@ -14,24 +14,17 @@ const sessionStore = new Map<string, ShopifySession>()
 
 /**
  * Encrypt and store session
+ * Note: In production, store the actual access token in encrypted storage (database/Redis)
  */
 export async function storeSession(session: ShopifySession): Promise<void> {
   try {
-    const secret = new TextEncoder().encode(JWT_SECRET)
-    const token = await new SignJWT({
-      shop: session.shop,
-      scope: session.scope,
-      isOnline: session.isOnline,
-    })
-      .setProtectedHeader({ alg: "HS256" })
-      .setIssuedAt()
-      .setExpirationTime("30d")
-      .sign(secret)
-
-    // Store access token separately (in production, use encrypted storage)
+    // Store the session with the actual access token
+    // In production, encrypt the access token before storing
     sessionStore.set(session.shop, {
       ...session,
-      accessToken: token, // In production, encrypt this separately
+      // accessToken should be the actual Shopify access token
+      // If it's a JWT token (from previous bug), we need to handle migration
+      // For now, store it as-is
     })
   } catch (error) {
     console.error("Error storing session:", error)
@@ -41,21 +34,16 @@ export async function storeSession(session: ShopifySession): Promise<void> {
 
 /**
  * Retrieve session by shop domain
+ * Note: In production, retrieve from encrypted storage (database/Redis)
  */
 export async function getSession(shop: string): Promise<ShopifySession | null> {
   const session = sessionStore.get(shop)
   if (!session) return null
 
-  // Verify JWT token
-  try {
-    const secret = new TextEncoder().encode(JWT_SECRET)
-    await jwtVerify(session.accessToken, secret)
-    return session
-  } catch (error) {
-    // Token expired or invalid
-    sessionStore.delete(shop)
-    return null
-  }
+  // In production, decrypt and verify the access token
+  // For now, return the session if it exists
+  // The access token should be the actual Shopify access token, not a JWT
+  return session
 }
 
 /**

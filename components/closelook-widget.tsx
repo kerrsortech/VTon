@@ -2,9 +2,8 @@
 
 import type React from "react"
 
-import { useState, useRef } from "react"
-import { Upload, Loader2 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { useState, useRef, useEffect } from "react"
+import { Upload, X, Lock } from "lucide-react"
 import { useCloselook } from "@/components/closelook-provider"
 import type { Product, TryOnResult } from "@/lib/closelook-types"
 
@@ -15,42 +14,153 @@ interface CloselookWidgetProps {
 }
 
 export function CloselookWidget({ product, onTryOnComplete, className }: CloselookWidgetProps) {
-  const [userPhoto, setUserPhoto] = useState<File | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [isDragging, setIsDragging] = useState(false)
-  const [isHovering, setIsHovering] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const dragCounterRef = useRef(0)
-  const { setGeneratingProductId } = useCloselook()
+  const [showUploadDialog, setShowUploadDialog] = useState(false)
+  const [fullBodyFile, setFullBodyFile] = useState<File | null>(null)
+  const [halfBodyFile, setHalfBodyFile] = useState<File | null>(null)
+  const fullBodyInputRef = useRef<HTMLInputElement>(null)
+  const halfBodyInputRef = useRef<HTMLInputElement>(null)
+  const { setGeneratingProductId, userImages, setUserImages } = useCloselook()
+  const [isLoadingImages, setIsLoadingImages] = useState(false)
 
-  const handleFileSelect = async (file: File) => {
-    if (!file.type.startsWith("image/")) {
-      setError("Please upload an image file")
+  // Check if user has uploaded images
+  const hasUploadedImages = userImages.fullBodyUrl || userImages.halfBodyUrl
+
+  // Fetch existing user images on mount
+  useEffect(() => {
+    const fetchUserImages = async () => {
+      // Skip if images are already loaded
+      if (hasUploadedImages) {
+        return
+      }
+
+      setIsLoadingImages(true)
+      try {
+        // Get Shopify customer ID from window if available (for Shopify stores)
+        const shopifyCustomerId = typeof window !== "undefined" 
+          ? (window as any).Shopify?.customer?.id 
+          : null
+
+        const headers: HeadersInit = {}
+        if (shopifyCustomerId) {
+          headers["x-shopify-customer-id"] = shopifyCustomerId.toString()
+        }
+
+        const response = await fetch("/api/user-images", {
+          method: "GET",
+          headers,
+          credentials: "include", // Include cookies for anonymous user ID
+        })
+
+        if (response.ok) {
+          const result = await response.json()
+          if (result.images && (result.images.fullBodyUrl || result.images.halfBodyUrl)) {
+            setUserImages({
+              fullBodyUrl: result.images.fullBodyUrl,
+              halfBodyUrl: result.images.halfBodyUrl,
+            })
+          }
+        } else if (response.status !== 400) {
+          // Log non-client errors (400 means no user ID, which is expected for new users)
+          console.warn("Failed to fetch user images:", response.status)
+        }
+      } catch (error) {
+        // Silently fail - user images might not exist yet
+        console.debug("Could not fetch user images:", error)
+      } finally {
+        setIsLoadingImages(false)
+      }
+    }
+
+    fetchUserImages()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run on mount
+
+  /**
+   * Get request headers including Shopify customer ID if available
+   */
+  const getRequestHeaders = (): HeadersInit => {
+    const headers: HeadersInit = {}
+    
+    // Get Shopify customer ID from window if available (for Shopify stores)
+    if (typeof window !== "undefined") {
+      const shopifyCustomerId = (window as any).Shopify?.customer?.id
+      if (shopifyCustomerId) {
+        headers["x-shopify-customer-id"] = shopifyCustomerId.toString()
+      }
+    }
+    
+    return headers
+  }
+
+  const handleFullBodySelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file && file.type.startsWith("image/")) {
+      setFullBodyFile(file)
+      handleUploadImage(file, "fullBody")
+    }
+  }
+
+  const handleHalfBodySelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file && file.type.startsWith("image/")) {
+      setHalfBodyFile(file)
+      handleUploadImage(file, "halfBody")
+    }
+  }
+
+  const handleUploadImage = async (file: File, type: "fullBody" | "halfBody") => {
+    try {
+      const formData = new FormData()
+      formData.append(type === "fullBody" ? "fullBodyPhoto" : "halfBodyPhoto", file)
+
+      const response = await fetch("/api/upload-user-images", {
+        method: "POST",
+        headers: getRequestHeaders(),
+        body: formData,
+        credentials: "include", // Include cookies for user ID
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to upload ${type} image`)
+      }
+
+      const result = await response.json()
+      
+      // Store the uploaded image URL in context
+      setUserImages({
+        ...userImages,
+        [type === "fullBody" ? "fullBodyUrl" : "halfBodyUrl"]: result.images[0]?.url,
+      })
+
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload image")
+    }
+  }
+
+  const handleTryOn = async () => {
+    if (!hasUploadedImages) {
+      setError("Please upload at least one photo")
       return
     }
 
-    setUserPhoto(file)
-    setError(null)
-
-    await handleTryOn(file)
-  }
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      handleFileSelect(file)
-    }
-  }
-
-  const handleTryOn = async (file: File) => {
     setIsGenerating(true)
     setGeneratingProductId(product.id)
     setError(null)
 
     try {
       const formData = new FormData()
-      formData.append("userPhoto", file)
+
+      // Send both URLs if available, API will choose the right one
+      if (userImages.fullBodyUrl) {
+        formData.append("fullBodyUrl", userImages.fullBodyUrl)
+      }
+      if (userImages.halfBodyUrl) {
+        formData.append("halfBodyUrl", userImages.halfBodyUrl)
+      }
 
       const maxProductImages = 3
       const productImagesToSend = product.images.slice(0, maxProductImages)
@@ -76,9 +186,36 @@ export function CloselookWidget({ product, onTryOnComplete, className }: Closelo
         formData.append("productUrl", productUrl)
       }
 
+      // Include analytics tracking data
+      formData.append("productId", product.id)
+      
+      // Get shop domain from window (for Shopify stores)
+      if (typeof window !== "undefined") {
+        const shopDomain = (window as any).Shopify?.shop || 
+                          (window as any).shopDomain ||
+                          (product.metadata?.shopDomain as string) ||
+                          null
+        if (shopDomain) {
+          formData.append("shopDomain", shopDomain)
+        }
+
+        // Get customer info for tracking
+        const shopifyCustomerId = (window as any).Shopify?.customer?.id
+        if (shopifyCustomerId) {
+          formData.append("shopifyCustomerId", shopifyCustomerId.toString())
+        }
+
+        const customerEmail = (window as any).Shopify?.customer?.email
+        if (customerEmail) {
+          formData.append("customerEmail", customerEmail)
+        }
+      }
+
       const response = await fetch("/api/try-on", {
         method: "POST",
+        headers: getRequestHeaders(),
         body: formData,
+        credentials: "include", // Include cookies for user ID
       })
 
       if (!response.ok) {
@@ -95,7 +232,6 @@ export function CloselookWidget({ product, onTryOnComplete, className }: Closelo
 
       const result: TryOnResult = await response.json()
       onTryOnComplete?.(result)
-      setUserPhoto(null)
       setGeneratingProductId(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate try-on")
@@ -105,128 +241,140 @@ export function CloselookWidget({ product, onTryOnComplete, className }: Closelo
     }
   }
 
-  const handleDragEnter = (e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    dragCounterRef.current++
-    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
-      setIsDragging(true)
-    }
-  }
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    dragCounterRef.current--
-    if (dragCounterRef.current === 0) {
-      setIsDragging(false)
-    }
-  }
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-  }
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsDragging(false)
-    dragCounterRef.current = 0
-
-    const file = e.dataTransfer.files?.[0]
-    if (file) {
-      handleFileSelect(file)
-    }
-  }
-
-  const handleClick = () => {
-    if (!isGenerating) {
-      fileInputRef.current?.click()
-    }
+  const handleCloseDialog = () => {
+    setShowUploadDialog(false)
+    setFullBodyFile(null)
+    setHalfBodyFile(null)
+    setError(null)
   }
 
   return (
     <>
-      <div className={cn("fixed bottom-6 right-6 z-50", className)}>
-        <button
-          onClick={handleClick}
-          onDragEnter={handleDragEnter}
-          onDragLeave={handleDragLeave}
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-          onMouseEnter={() => setIsHovering(true)}
-          onMouseLeave={() => setIsHovering(false)}
-          disabled={isGenerating}
-          className={cn(
-            "group relative h-16 w-16 rounded-2xl transition-all duration-500 ease-out",
-            "backdrop-blur-xl bg-gradient-to-br from-white/90 via-white/70 to-white/50",
-            "border border-white/20 shadow-2xl",
-            "hover:scale-110 hover:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.3)]",
-            "active:scale-95",
-            "disabled:opacity-50 disabled:cursor-not-allowed",
-            isDragging && "scale-110 ring-4 ring-blue-500/50 border-blue-500/50",
-            isGenerating && "animate-pulse",
-          )}
-        >
-          <div
-            className={cn(
-              "absolute inset-0 rounded-2xl bg-gradient-to-br from-blue-500/20 via-purple-500/20 to-pink-500/20",
-              "opacity-0 group-hover:opacity-100 transition-opacity duration-500",
-            )}
-          />
-
-          <div
-            className={cn(
-              "absolute -inset-0.5 rounded-2xl bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500",
-              "opacity-0 group-hover:opacity-30 blur-lg transition-opacity duration-500",
-            )}
-          />
-
-          <div className="relative flex h-full w-full items-center justify-center">
-            {isGenerating ? (
-              <Loader2 className="h-7 w-7 animate-spin text-gray-700" />
-            ) : isDragging ? (
-              <div className="flex flex-col items-center gap-1">
-                <Upload className="h-6 w-6 text-blue-600 animate-bounce" />
-                <span className="text-[8px] font-semibold text-gray-700 whitespace-nowrap">Drop here</span>
-              </div>
-            ) : (
-              <div
-                className={cn(
-                  "flex flex-col items-center gap-1 transition-transform duration-300",
-                  isHovering && "scale-110",
-                )}
+      {/* Upload Dialog */}
+      {showUploadDialog && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-2xl font-bold">Let's Find Your Perfect Fit</h2>
+              <button
+                onClick={handleCloseDialog}
+                className="p-2 hover:bg-gray-100 rounded-full transition-colors"
               >
-                <Upload className="h-7 w-7 text-gray-700 transition-colors group-hover:text-blue-600" />
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="text-sm text-gray-600 mb-4">
+              Upload a photo to see products styled on you. We'll show you exactly how each item looks before you buy.
+            </p>
+
+            <div className="grid grid-cols-2 gap-4 mb-5">
+              {/* Standing Photo Upload (Left) */}
+              <div className="space-y-2.5">
+                <label className="text-sm font-medium text-gray-700 text-center block mb-1">Standing Photo</label>
+                <div className="border-2 border-dashed border-gray-300 rounded-lg p-5 hover:border-blue-500 transition-colors min-h-[180px] flex items-center justify-center">
+                  <label className="block cursor-pointer w-full h-full">
+                    <input
+                      ref={fullBodyInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFullBodySelect}
+                      className="hidden"
+                    />
+                    <div className="text-center">
+                      {userImages.fullBodyUrl ? (
+                        <div className="space-y-3">
+                          <img
+                            src={userImages.fullBodyUrl}
+                            alt="Standing photo"
+                            className="w-full h-40 mx-auto object-cover rounded-lg"
+                          />
+                          <p className="text-xs font-medium text-green-600">✓ Photo uploaded</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <Upload className="h-10 w-10 mx-auto text-gray-400" />
+                          <p className="text-sm text-gray-600">Click to upload or drag and drop</p>
+                        </div>
+                      )}
+                    </div>
+                  </label>
+                </div>
+                <p className="text-xs text-gray-500 text-center mt-1.5">
+                  Full-length photo for dresses, pants & full outfits. Stand naturally with good lighting.
+                </p>
               </div>
-            )}
+
+              {/* Portrait Photo Upload (Right) */}
+              <div className="space-y-2.5">
+                <label className="text-sm font-medium text-gray-700 text-center block mb-1">Portrait Photo</label>
+                <div className="border-2 border-dashed border-gray-300 rounded-lg p-5 hover:border-blue-500 transition-colors min-h-[180px] flex items-center justify-center">
+                  <label className="block cursor-pointer w-full h-full">
+                    <input
+                      ref={halfBodyInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleHalfBodySelect}
+                      className="hidden"
+                    />
+                    <div className="text-center">
+                      {userImages.halfBodyUrl ? (
+                        <div className="space-y-3">
+                          <img
+                            src={userImages.halfBodyUrl}
+                            alt="Portrait photo"
+                            className="w-full h-40 mx-auto object-cover rounded-lg"
+                          />
+                          <p className="text-xs font-medium text-green-600">✓ Photo uploaded</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <Upload className="h-10 w-10 mx-auto text-gray-400" />
+                          <p className="text-sm text-gray-600">Click to upload or drag and drop</p>
+                        </div>
+                      )}
+                    </div>
+                  </label>
+                </div>
+                <p className="text-xs text-gray-500 text-center mt-1.5">
+                  Waist-up photo for tops, accessories & jewelry. Face clearly visible works best.
+                </p>
+              </div>
+            </div>
+
+            {/* Privacy Notice */}
+            <div className="mb-5 p-3.5 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="flex items-start gap-3">
+                <Lock className="h-4 w-4 text-gray-600 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-gray-600 leading-relaxed">
+                  Your privacy matters. Photos are encrypted, never shared, and only visible to you. We never use your images for AI training or any other purpose.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-1">
+              <button
+                onClick={handleCloseDialog}
+                className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  handleCloseDialog()
+                  if (hasUploadedImages) {
+                    handleTryOn()
+                  }
+                }}
+                disabled={!hasUploadedImages}
+                className="flex-1 px-4 py-2.5 bg-gray-800 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Save
+              </button>
+            </div>
           </div>
-
-          <div
-            className={cn(
-              "absolute inset-0 rounded-2xl bg-white/50",
-              "opacity-0 group-active:opacity-100 group-active:animate-ping",
-            )}
-          />
-        </button>
-
-        {error && (
-          <div className="absolute bottom-20 right-0 w-64 p-3 rounded-xl backdrop-blur-xl bg-red-500/90 text-white text-xs shadow-2xl animate-in slide-in-from-bottom-5 fade-in duration-300">
-            <p className="font-semibold mb-1">Error</p>
-            <p className="opacity-90">{error}</p>
-          </div>
-        )}
-
-        {isGenerating && (
-          <div className="absolute bottom-20 right-0 w-64 p-3 rounded-xl backdrop-blur-xl bg-blue-500/90 text-white text-xs shadow-2xl animate-in slide-in-from-bottom-5 fade-in duration-300">
-            <p className="font-semibold mb-1">Creating your try-on...</p>
-            <p className="opacity-90">This may take a few moments</p>
-          </div>
-        )}
-      </div>
-
-      <input ref={fileInputRef} type="file" accept="image/*" onChange={handleInputChange} className="hidden" />
+        </div>
+      )}
     </>
   )
 }

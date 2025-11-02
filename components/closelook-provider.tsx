@@ -3,12 +3,19 @@
 import { createContext, useContext, useState, type ReactNode } from "react"
 import type { TryOnResult, CloselookConfig } from "@/lib/closelook-types"
 
+interface UserImages {
+  fullBodyUrl?: string
+  halfBodyUrl?: string
+}
+
 interface CloselookContextValue {
   tryOnResults: Map<string, TryOnResult>
   addTryOnResult: (productId: string, result: TryOnResult) => void
   getTryOnResult: (productId: string) => TryOnResult | undefined
   clearTryOnResult: (productId: string) => void
   clearAllResults: () => void
+  userImages: UserImages
+  setUserImages: (images: UserImages) => void
   config: CloselookConfig
   isEnabled: boolean
   setIsEnabled: (enabled: boolean) => void
@@ -25,6 +32,7 @@ interface CloselookProviderProps {
 
 export function CloselookProvider({ children, config = {} }: CloselookProviderProps) {
   const [tryOnResults, setTryOnResults] = useState<Map<string, TryOnResult>>(new Map())
+  const [userImages, setUserImages] = useState<UserImages>({})
   const [isEnabled, setIsEnabled] = useState(true)
   const [generatingProductId, setGeneratingProductId] = useState<string | null>(null)
 
@@ -56,6 +64,8 @@ export function CloselookProvider({ children, config = {} }: CloselookProviderPr
         getTryOnResult,
         clearTryOnResult,
         clearAllResults,
+        userImages,
+        setUserImages,
         config,
         isEnabled,
         setIsEnabled,

@@ -2,6 +2,7 @@ import Replicate from "replicate"
 import { put } from "@vercel/blob"
 import { type NextRequest, NextResponse } from "next/server"
 import { detectBodyAvailabilitySync } from "@/lib/prompt-helpers"
+import { trackTryOnEvent } from "@/lib/db/analytics"
 import {
   mapCategoryToType,
   getCategoryConfig,
@@ -35,6 +36,8 @@ export async function POST(request: NextRequest) {
 
     const formData = await request.formData()
     const userPhoto = formData.get("userPhoto") as File
+    const fullBodyUrl = formData.get("fullBodyUrl") as string | null
+    const halfBodyUrl = formData.get("halfBodyUrl") as string | null
     const productImageCount = Number.parseInt(formData.get("productImageCount") as string) || 1
     const productImages: File[] = []
 
@@ -48,31 +51,50 @@ export async function POST(request: NextRequest) {
     const productName = formData.get("productName") as string
     const productCategory = formData.get("productCategory") as string
     const productUrl = formData.get("productUrl") as string | null
+    const shopDomain = formData.get("shopDomain") as string | null
+    const productId = formData.get("productId") as string | null
+    const customerId = formData.get("customerId") as string | null
+    const customerEmail = formData.get("customerEmail") as string | null
+    const shopifyCustomerId = formData.get("shopifyCustomerId") as string | null
 
     // Input validation
-    if (!userPhoto || productImages.length === 0 || !productName) {
-      logger.warn("Validation failed: Missing required fields", { requestId })
+    if (!userPhoto && !fullBodyUrl && !halfBodyUrl) {
+      logger.warn("Validation failed: Missing user photo", { requestId })
       return NextResponse.json(
         {
           error: "Missing required fields",
-          details: "User photo, product images, and product name are required",
+          details: "User photo is required",
         },
         { status: 400 },
       )
     }
 
-    // Validate user photo
-    const userPhotoValidation = validateUserPhoto(userPhoto)
-    if (!userPhotoValidation.isValid) {
-      logger.warn("User photo validation failed", { requestId, errors: userPhotoValidation.errors })
+    if (productImages.length === 0 || !productName) {
+      logger.warn("Validation failed: Missing required fields", { requestId })
       return NextResponse.json(
         {
-          error: "Invalid user photo",
-          details: userPhotoValidation.errors.join("; "),
-          warnings: userPhotoValidation.warnings,
+          error: "Missing required fields",
+          details: "Product images and product name are required",
         },
         { status: 400 },
       )
+    }
+
+    // Validate user photo (only if file is provided)
+    let userPhotoValidation
+    if (userPhoto && userPhoto instanceof File) {
+      userPhotoValidation = validateUserPhoto(userPhoto)
+      if (!userPhotoValidation.isValid) {
+        logger.warn("User photo validation failed", { requestId, errors: userPhotoValidation.errors })
+        return NextResponse.json(
+          {
+            error: "Invalid user photo",
+            details: userPhotoValidation.errors.join("; "),
+            warnings: userPhotoValidation.warnings,
+          },
+          { status: 400 },
+        )
+      }
     }
 
     // Validate product images
@@ -90,7 +112,7 @@ export async function POST(request: NextRequest) {
     }
 
     logger.info("Try-on request received", { requestId, productName, imageCount: productImages.length })
-    if (userPhotoValidation.warnings.length > 0) {
+    if (userPhotoValidation && userPhotoValidation.warnings.length > 0) {
       logger.warn("User photo warnings", { requestId, warnings: userPhotoValidation.warnings })
     }
     if (productImagesValidation.warnings.length > 0) {
@@ -103,13 +125,81 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Configuration error" }, { status: 500 })
     }
 
-    // Detect body availability (using sync version for now - can be enhanced with async later)
-    const userBodyAvailability = detectBodyAvailabilitySync(userPhoto)
+    // Determine which user image to use based on product category and availability
+    let selectedUserPhoto: File | null = null
+    let selectedUserPhotoUrl: string | null = null
+    let userBodyAvailability: "full-body" | "upper-body" | "head-only"
+
+    // If we have URLs instead of files, we need to do category analysis first
+    if (fullBodyUrl || halfBodyUrl) {
+      // For URL-based requests, we need to analyze the product first to determine which image to use
+      // We'll use a temporary product image for initial analysis
+      logger.info("URL-based request detected, analyzing product category first", { requestId })
+      
+      // Quick category detection to choose image (simplified - just use product name/category)
+      const categoryType = mapCategoryToType(productCategory || "Unknown")
+      const requiresFullBody = categoryType === "FOOTWEAR" || categoryType === "CLOTHING_LOWER" || categoryType === "CLOTHING_FULL"
+      
+      // Choose appropriate image based on category
+      if (requiresFullBody && fullBodyUrl) {
+        selectedUserPhotoUrl = fullBodyUrl
+        userBodyAvailability = "full-body"
+        logger.info("Selected full-body image for product type", { requestId, categoryType })
+      } else if (requiresFullBody && !fullBodyUrl) {
+        selectedUserPhotoUrl = halfBodyUrl || null
+        userBodyAvailability = "upper-body"
+        logger.warn("Full-body product but no full-body image available, using half-body", { requestId })
+      } else if (!requiresFullBody && halfBodyUrl) {
+        selectedUserPhotoUrl = halfBodyUrl
+        userBodyAvailability = "upper-body"
+        logger.info("Selected half-body image for product type", { requestId, categoryType })
+      } else {
+        selectedUserPhotoUrl = fullBodyUrl || null
+        userBodyAvailability = "full-body"
+        logger.info("Selected available image", { requestId, categoryType })
+      }
+      
+      if (!selectedUserPhotoUrl) {
+        logger.error("No valid user image selected", { requestId })
+        return NextResponse.json(
+          {
+            error: "Invalid image selection",
+            details: "Could not determine appropriate user image",
+          },
+          { status: 400 },
+        )
+      }
+      
+      // Fetch the selected image to convert to File
+      logger.debug("Fetching selected user image", { requestId })
+      const userImageResponse = await fetch(selectedUserPhotoUrl)
+      if (!userImageResponse.ok) {
+        throw new Error("Failed to fetch user image")
+      }
+      const userImageBlob = await userImageResponse.blob()
+      selectedUserPhoto = new File([userImageBlob], "user-photo.jpg", { type: userImageBlob.type })
+    } else if (userPhoto) {
+      // Traditional file upload
+      selectedUserPhoto = userPhoto
+      userBodyAvailability = detectBodyAvailabilitySync(userPhoto)
+    } else {
+      logger.error("No user photo provided", { requestId })
+      return NextResponse.json(
+        {
+          error: "Missing user photo",
+          details: "Please provide a user photo",
+        },
+        { status: 400 },
+      )
+    }
+
     logger.debug("Detected body availability", { requestId, bodyAvailability: userBodyAvailability })
 
     logger.info("Analyzing product", { requestId })
     const productAnalysisFormData = new FormData()
-    productAnalysisFormData.append("userPhoto", userPhoto)
+    if (selectedUserPhoto) {
+      productAnalysisFormData.append("userPhoto", selectedUserPhoto)
+    }
     productAnalysisFormData.append("productImage", productImages[0])
     
     // Add product URL for enhanced page analysis (if available)
@@ -174,7 +264,18 @@ export async function POST(request: NextRequest) {
     }
 
     logger.debug("Uploading images to Blob storage", { requestId })
-    const userPhotoBlob = await put(`try-on/user-${Date.now()}-${userPhoto.name}`, userPhoto, {
+    if (!selectedUserPhoto) {
+      logger.error("No selected user photo", { requestId })
+      return NextResponse.json(
+        {
+          error: "Invalid image selection",
+          details: "Could not select user photo",
+        },
+        { status: 400 },
+      )
+    }
+    
+    const userPhotoBlob = await put(`try-on/user-${Date.now()}-${selectedUserPhoto.name}`, selectedUserPhoto, {
       access: "public",
     })
 
@@ -361,6 +462,28 @@ export async function POST(request: NextRequest) {
     }
     if (imageUrlValidation.warnings.length > 0) {
       logger.warn("Image URL warnings", { requestId, warnings: imageUrlValidation.warnings })
+    }
+
+    // Track try-on event for analytics (non-blocking)
+    if (shopDomain) {
+      trackTryOnEvent(shopDomain, {
+        product_id: productId || undefined,
+        product_name: productName || undefined,
+        product_url: productUrl || undefined,
+        product_image_url: productImageBlobs[0]?.url || undefined,
+        customer_id: customerId || undefined,
+        customer_email: customerEmail || undefined,
+        shopify_customer_id: shopifyCustomerId || undefined,
+        metadata: {
+          requestId,
+          category: detectedCategory,
+          categoryType,
+          processingTime: Date.now() - startTime,
+        },
+      }).catch((error) => {
+        logger.error("Failed to track try-on event", { requestId, error })
+        // Don't fail the request if tracking fails
+      })
     }
 
     return NextResponse.json({

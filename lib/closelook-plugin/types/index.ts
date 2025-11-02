@@ -12,6 +12,7 @@ export interface CloselookProduct {
   price: number
   images: string[]
   description: string
+  sizes?: string[] // Available sizes (optional, for compatibility with Product type)
   // Platform-specific metadata can be stored here
   metadata?: Record<string, unknown>
 }

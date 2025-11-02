@@ -1,6 +1,81 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
+@keyframes gradient-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.animate-gradient-shift {
+  animation: gradient-shift 8s ease infinite;
+}
+
+@keyframes gradient-spin {
+  0% { 
+    background-position: 0% 50%;
+    transform: rotate(0deg);
+  }
+  50% { 
+    background-position: 100% 50%;
+    transform: rotate(180deg);
+  }
+  100% { 
+    background-position: 0% 50%;
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes blob-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+}
+
+.animate-spin-slow {
+  animation: gradient-spin 8s linear infinite, blob-pulse 3s ease-in-out infinite;
+}
+
+@keyframes bounce-in {
+  0% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-bounce-in {
+  animation: bounce-in 225ms cubic-bezier(0.4, 0.0, 0.2, 1);
+}
+
+/* Material Design subtle overshoot bounce */
+@keyframes material-bounce-in {
+  0% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  60% {
+    transform: translateX(-4%);
+    opacity: 0.95;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-material-bounce {
+  animation: material-bounce-in 275ms cubic-bezier(0.4, 0.0, 0.2, 1);
+}
+
 @custom-variant dark (&:is(.dark *));
 
 :root {
@@ -151,4 +226,43 @@ body {
   animation: glow-pulse 2.5s ease-in-out infinite;
   position: relative;
   border-radius: 0.5rem;
+}
+
+/* Rotating conic gradient border animation for chatbot */
+@keyframes rotate-conic {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.chatbot-shine {
+  position: absolute;
+  inset: -2px;
+  border-radius: 9999px;
+  animation: rotate-conic 3s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.chatbot-shine::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  padding: 2px;
+  background: conic-gradient(
+    from 0deg,
+    rgba(102, 126, 234, 1),
+    rgba(118, 75, 162, 1),
+    rgba(240, 147, 251, 1),
+    rgba(79, 172, 254, 1),
+    rgba(102, 126, 234, 1)
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
 }

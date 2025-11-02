@@ -132,6 +132,52 @@ export const demoProducts: Product[] = [
     description:
       "Bold square sunglasses from the LV Clash collection. Features distinctive gold-tone LV monogram hardware on the temples, gradient lenses with 100% UV protection, and a modern oversized silhouette.",
   },
+  {
+    id: "luxury-gold-chain",
+    name: "Premium Gold Chain Necklace",
+    category: "Accessories",
+    type: "Jewelry",
+    color: "Gold",
+    price: 1250,
+    sizes: undefined,
+    images: [
+      "https://cqwewdvakvcurbil.public.blob.vercel-storage.com/products/luxury-gold-chain/luxury-gold-chain-1.webp",
+      "https://cqwewdvakvcurbil.public.blob.vercel-storage.com/products/luxury-gold-chain/luxury-gold-chain-2.webp",
+    ],
+    description:
+      "Exquisite 18k gold chain necklace with masterfully crafted links. Features a luxurious mirror finish and substantial weight for a prestigious feel. Perfect for layering or wearing as a statement piece. Hand-polished to perfection for maximum brilliance.",
+  },
+  {
+    id: "designer-bucket-hat",
+    name: "Designer Contrast Bucket Hat",
+    category: "Accessories",
+    type: "Hat",
+    color: "Black/White",
+    price: 85,
+    sizes: ["One Size"],
+    images: [
+      "https://cqwewdvakvcurbil.public.blob.vercel-storage.com/products/designer-bucket-hat/designer-bucket-hat-1.jpg",
+      "https://cqwewdvakvcurbil.public.blob.vercel-storage.com/products/designer-bucket-hat/designer-bucket-hat-2.jpg",
+    ],
+    description:
+      "Stylish bucket hat with bold contrast accents and premium construction. Features moisture-wicking fabric, adjustable chin strap, and a structured crown for optimal fit. Perfect for sun protection or streetwear fashion. UVA/UVB protection.",
+  },
+  {
+    id: "luxury-tote-handbag",
+    name: "Luxury Leather Tote Handbag",
+    category: "Accessories",
+    type: "Handbag",
+    color: "Black",
+    price: 450,
+    sizes: undefined,
+    images: [
+      "https://cqwewdvakvcurbil.public.blob.vercel-storage.com/products/luxury-tote-handbag/luxury-tote-handbag-front.avif",
+      "https://cqwewdvakvcurbil.public.blob.vercel-storage.com/products/luxury-tote-handbag/luxury-tote-handbag-side.avif",
+      "https://cqwewdvakvcurbil.public.blob.vercel-storage.com/products/luxury-tote-handbag/luxury-tote-handbag-interior.avif",
+    ],
+    description:
+      "Sophisticated leather tote bag crafted from premium Italian leather. Features sturdy top handles, adjustable shoulder strap, and spacious interior with multiple organizational pockets. Timeless design with subtle branding. Perfect for work or weekend adventures.",
+  },
 ]
 
 export function getProductById(id: string): Product | undefined {

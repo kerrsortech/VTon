@@ -106,7 +106,16 @@ Rules and details to produce:
 
 1) productCategory (from PRODUCT IMAGE - second image):
  - Identify the product type from one of these main categories: Clothing (T-Shirts, Shirts, Hoodies, Sweaters, Jackets, Jeans, Pants, Shorts, Dresses), Footwear (Sneakers, Shoes, Boots, Sandals), Headwear (Sunglasses, Glasses, Caps, Hats, Beanies), Accessories (Watches, Necklaces, Earrings, Bracelets, Rings, Bags, Backpacks, Belts, Scarves, Gloves).
- - For BAGS, be very specific: "Handbag", "Shoulder Bag", "Crossbody Bag", "Backpack", "Tote Bag", "Clutch", "Belt Bag", "Mini Purse" - NOT just "Bag". Be specific about the bag type.
+ - For BAGS, analyze the product image carefully to determine the bag type based on visible features:
+   * Look at the straps/handles: Single short handle or top handles = "Handbag" (held in hand)
+   * Shoulder strap visible = "Shoulder Bag" (worn on shoulder)
+   * Long diagonal strap visible = "Crossbody Bag" (worn diagonally across body)
+   * Two straps for back = "Backpack" (worn on back)
+   * Large open top with handles = "Tote Bag" (held by handles or shoulder)
+   * Small handheld with no strap = "Clutch" (held in hand)
+   * Waist-worn style = "Belt Bag" (worn around waist)
+   - Be VERY specific: "Handbag", "Shoulder Bag", "Crossbody Bag", "Backpack", "Tote Bag", "Clutch", "Belt Bag", "Mini Purse" - NOT just "Bag". 
+   - CRITICAL: Analyze the PRODUCT IMAGE itself to determine bag type from visible straps, handles, and design features. Do NOT guess - only identify based on what you actually see in the image.
  - Return the most specific category name (e.g., "Running Shoes", "Leather Crossbody Bag", "Sunglasses", "T-Shirt", "Wristwatch", "Handbag", "Shoulder Bag").
  - Be specific about the product type but concise.
  - If unsure, return "Unknown".
@@ -114,15 +123,24 @@ Rules and details to produce:
 2) detailedVisualDescription (from PRODUCT IMAGE - second image, 2–4 concise sentences):
  - State exact visible COLORS (primary + accent), MATERIALS (e.g., knit, suede, pebbled leather), TEXTURES (matte, glossy, woven).
  - Call out visible logos/patterns (location on product), key hardware (color/finish, e.g., "brushed brass buckle") and construction (zippers, straps, midsole window).
+ - For BAGS: Describe handle/strap type (short handles, shoulder strap, crossbody strap, backpack straps, etc.), hardware details (buckles, zippers, clasps), closure mechanism, and overall design structure. This is critical for determining how the bag should be held/worn.
  - Note scale / size hints (e.g., "low-profile running shoe with pronounced air midsole").
 
 3) imageGenerationPrompt (4–6 sentences; imperative instructions for the image model):
- - Start with: "Use product reference images to reproduce exact colors, textures, and scale."
+ - Start with: "Use product reference images to reproduce exact colors, textures, logos, hardware, and scale. DO NOT manipulate or change product features from the reference images - preserve them exactly as shown."
+ - For BAGS specifically: Analyze the productCategory you identified and specify how the user should hold/wear it:
+   * If "Handbag": "User holds the handbag in one hand at waist/hip level, exactly as shown in product reference. Preserve all product features: handles, logos, hardware, textures, and colors from reference image."
+   * If "Shoulder Bag": "User wears the shoulder bag on one shoulder with strap visible, exactly as designed. Preserve all product features: strap, logos, hardware, textures, and colors from reference image."
+   * If "Crossbody Bag": "User wears the crossbody bag diagonally across the body with strap visible, exactly as designed. Preserve all product features: strap length and style, logos, hardware, textures, and colors from reference image."
+   * If "Backpack": "User wears the backpack on back with both straps over shoulders, exactly as designed. Preserve all product features: straps, logos, hardware, textures, and colors from reference image."
+   * If "Tote Bag": "User holds the tote bag by handles or wears on shoulder, exactly as shown in product reference. Preserve all product features: handles, logos, hardware, textures, and colors from reference image."
+   * If "Clutch": "User holds the clutch in hand at waist/chest level, exactly as shown in product reference. Preserve all product features: design, logos, hardware, textures, and colors from reference image."
+   * If "Belt Bag": "User wears the belt bag around waist with strap visible, exactly as designed. Preserve all product features: strap, buckle, logos, hardware, textures, and colors from reference image."
  - Specify framing/pose for the product (for sunglasses: "head-and-shoulders, straight-on, show full frame without cropping"; for shoes: "full-body, feet visible, front or 3/4 front").
  - INCLUDE the cameraHint: "{{cameraHint}}".
  - INCLUDE productScale guidance fields: "productScaleCategory" and "productScaleRatioToHead" that must be used to preserve realistic product size (e.g., "productScaleCategory: medium; productScaleRatioToHead: 1.1").
  - Also include in imageGenerationPrompt: "Use userCharacteristics for identity preservation. forcePoseChange=true — change pose, camera angle, clothing, and lighting to match targetFraming. Replace background with studio (see backgroundInstruction)."
- - Add strict fidelity & logo rule: "Preserve user identity and skin tone exactly. DO NOT add or move logos; NEVER place logos/text on reflective surfaces (lenses/metal) unless the reference clearly shows the logo at that exact location. Ensure full product visibility with ~12% padding around product in frame."
+ - Add strict fidelity & logo rule: "Preserve user identity and skin tone exactly. DO NOT add, remove, move, or alter logos, hardware, straps, handles, or any product features from the reference images. NEVER place logos/text on reflective surfaces (lenses/metal) unless the reference clearly shows the logo at that exact location. Ensure full product visibility with ~12% padding around product in frame."
  - End: "Photorealistic, high-resolution, studio product shot suitable for e-commerce."
 
 4) cameraHint (from PRODUCT IMAGE - second image):

@@ -40,206 +40,67 @@ function detectBagType(category: string): "handbag" | "shoulder" | "crossbody" |
 function getBagSpecificInstructions(bagType: string): string {
   switch (bagType) {
     case "handbag":
-      return `
-SPECIAL INSTRUCTIONS FOR HANDBAG/MINI PURSE:
-- Three-quarter body shot showing ONE person holding the handbag naturally.
-- Handbag MUST be held in one hand (typically right hand) or resting on the forearm.
-- Natural holding posture: arm slightly bent, handbag positioned naturally at waist/hip level, visible and prominent.
-- The person's free hand can be at their side or slightly bent - natural standing pose.
-- Ensure entire handbag is clearly visible, not partially obscured.
-- Handbag handles/straps should appear natural, not stiff or awkward.
-- Keep user's clothing as-is, only add the handbag.
-- CRITICAL: Only ONE person in ONE pose with ONE handbag.
-`
+      return `HANDBAG: User holds the handbag in one hand at waist/hip level. Preserve all product features exactly from reference: handles, logos, hardware (buckles, zippers, clasps), textures, and colors. DO NOT add, remove, or alter any straps, handles, or product features.`
 
     case "clutch":
-      return `
-SPECIAL INSTRUCTIONS FOR CLUTCH:
-- Three-quarter body shot showing ONE person holding the clutch naturally.
-- Clutch MUST be held in one hand (typically left or right hand) at waist/chest level, or tucked under arm.
-- Natural holding posture: clutch positioned naturally, arm slightly bent or close to body.
-- The person's other hand can be at their side - natural standing pose.
-- Ensure entire clutch is clearly visible.
-- Keep user's clothing as-is, only add the clutch.
-- CRITICAL: Only ONE person in ONE pose with ONE clutch.
-`
+      return `CLUTCH: User holds the clutch in hand at waist/chest level. Preserve all product features exactly from reference: design, logos, hardware, textures, and colors. DO NOT add straps or alter the product design.`
 
     case "shoulder":
-      return `
-SPECIAL INSTRUCTIONS FOR SHOULDER BAG:
-- Three-quarter body shot showing ONE person wearing the shoulder bag naturally.
-- Shoulder bag MUST be positioned on one shoulder (typically left or right shoulder), strap resting naturally on shoulder.
-- Natural wearing posture: bag hanging at side at waist/hip level, strap clearly visible over shoulder.
-- The person's arms can be at sides or one arm slightly bent - natural standing pose.
-- Ensure entire bag and strap are clearly visible.
-- Bag should hang naturally, not stiff or awkward.
-- Keep user's clothing as-is, only add the shoulder bag.
-- CRITICAL: Only ONE person in ONE pose with ONE shoulder bag.
-`
+      return `SHOULDER BAG: User wears the shoulder bag on one shoulder with strap visible, exactly as designed. Preserve all product features exactly from reference: strap style and length, logos, hardware, textures, and colors. DO NOT alter strap length, style, or product features.`
 
     case "crossbody":
-      return `
-SPECIAL INSTRUCTIONS FOR CROSSBODY BAG:
-- Three-quarter body shot showing ONE person wearing the crossbody bag naturally.
-- Crossbody bag MUST be positioned diagonally across the body, strap going over one shoulder and across chest/back.
-- Natural wearing posture: bag positioned at opposite hip/side from shoulder, strap visible across body.
-- The person's arms can be at sides or one arm slightly bent - natural standing pose.
-- Ensure entire bag and crossbody strap are clearly visible.
-- Bag should hang naturally at hip/waist level on the opposite side.
-- Keep user's clothing as-is, only add the crossbody bag.
-- CRITICAL: Only ONE person in ONE pose with ONE crossbody bag.
-`
+      return `CROSSBODY BAG: User wears the crossbody bag diagonally across the body with strap visible, exactly as designed. Preserve all product features exactly from reference: strap length and diagonal positioning, logos, hardware, textures, and colors. DO NOT alter strap length, positioning, or product features.`
 
     case "backpack":
-      return `
-SPECIAL INSTRUCTIONS FOR BACKPACK:
-- Three-quarter to full-body shot showing ONE person wearing the backpack naturally.
-- Backpack MUST be positioned on the back, both straps over shoulders, straps visible.
-- Natural wearing posture: backpack centered on back, straps properly fitted over shoulders, bag positioned naturally.
-- The person can be facing camera or slight 3/4 turn - natural standing pose.
-- Ensure backpack is clearly visible on the person's back.
-- Straps should appear natural and properly fitted, not loose or awkward.
-- Keep user's clothing as-is, only add the backpack.
-- CRITICAL: Only ONE person in ONE pose with ONE backpack.
-`
+      return `BACKPACK: User wears the backpack on back with both straps over shoulders, exactly as designed. Preserve all product features exactly from reference: dual straps, logos, hardware, textures, and colors. DO NOT alter strap configuration or product features.`
 
     case "tote":
-      return `
-SPECIAL INSTRUCTIONS FOR TOTE BAG:
-- Three-quarter body shot showing ONE person carrying the tote bag naturally.
-- Tote bag can be held by handles in one hand OR on one shoulder, depending on bag style.
-- Natural carrying posture: if held, arm slightly bent at waist/hip level; if on shoulder, strap over shoulder with bag at side.
-- The person's other hand can be at their side - natural standing pose.
-- Ensure entire tote bag is clearly visible.
-- Handles or strap should appear natural.
-- Keep user's clothing as-is, only add the tote bag.
-- CRITICAL: Only ONE person in ONE pose with ONE tote bag.
-`
+      return `TOTE BAG: User holds the tote bag by handles or wears on shoulder (if strap present), exactly as shown in product reference. Preserve all product features exactly from reference: handles/straps, logos, hardware, textures, and colors. DO NOT add or remove handles/straps.`
 
     case "belt-bag":
-      return `
-SPECIAL INSTRUCTIONS FOR BELT BAG/WAIST BAG:
-- Three-quarter body shot showing ONE person wearing the belt bag naturally.
-- Belt bag MUST be positioned around the waist/hips, strap visible around waist.
-- Natural wearing posture: bag positioned at front, side, or back of waist/hips, strap fitting naturally around waist.
-- The person's arms can be at sides - natural standing pose.
-- Ensure entire belt bag and strap are clearly visible.
-- Bag should sit naturally on waist/hips, not too high or too low.
-- Keep user's clothing as-is, only add the belt bag.
-- CRITICAL: Only ONE person in ONE pose with ONE belt bag.
-`
+      return `BELT BAG: User wears the belt bag around waist with strap visible, exactly as designed. Preserve all product features exactly from reference: waist strap, buckle, logos, hardware, textures, and colors. DO NOT alter strap or buckle configuration.`
 
     default:
-      return `
-SPECIAL INSTRUCTIONS FOR BAGS (Generic):
-- Three-quarter body shot showing ONE person wearing/carrying the bag naturally.
-- Bag must be positioned correctly based on its design:
-  * Handbags/mini purses: held in hand or on forearm
-  * Shoulder bags: on one shoulder with strap visible
-  * Crossbody bags: diagonally across body
-  * Backpacks: on back with straps over shoulders
-  * Tote bags: held by handles or on shoulder
-- Ensure entire bag is visible, not partially cropped.
-- Bag straps and handles should appear natural, not stiff or awkward.
-- Keep user's clothing as-is, only add the bag.
-- CRITICAL: Only ONE person in ONE pose with ONE bag.
-`
+      return `BAG: Positioned based on design from product reference. Preserve all product features exactly: handles, straps, logos, hardware, textures, and colors from reference image. DO NOT manipulate or alter product features.`
   }
 }
 
 /**
  * Base prompt template that all category templates extend
+ * Optimized for speed and clarity
  */
-const BASE_TEMPLATE = `REFERENCE IMAGES:
-- User image: {{USER_IMAGE_URL}} — preserve identity, face, hair, and skin tone EXACTLY.
-- Product images: {{PRODUCT_IMAGE_URLS}} — use to reproduce colors, textures, logos, hardware, and scale EXACTLY.
+const BASE_TEMPLATE = `The person from {{USER_IMAGE_URL}} wearing the product from {{PRODUCT_IMAGE_URLS}}.
 
-GOAL (CRITICAL):
-Create EXACTLY ONE SINGLE photorealistic studio photograph of EXACTLY ONE person (the same person from the user image) wearing/using the product. 
-- MUST be ONE person only, NO multiple people, NO multiple poses, NO duplicate subjects, NO clones
-- MUST be a single, natural standing pose showcasing the product
-- Preserve user identity, facial features, and skin tone exactly
-- Output MUST be a single realistic image with one person in one pose only
+PRESERVE EXACTLY:
+- User identity: face, hair, skin tone, body type
+- Product: colors, textures, logos, hardware, scale from {{PRODUCT_SCALE_CATEGORY}}
+- For BAGS: Preserve exact handles, straps, hardware configuration, logos, and design structure from product reference. DO NOT add, remove, or alter any product features.
+- Gender: {{USER_GENDER}}
+- ONE person only, NO duplicates/clones/multi-poses
 
-MANDATORY FIDELITY RULES:
-1) Face & identity preservation:
-   - Preserve EXACT facial features, bone structure, hairline, facial hair, and skin tone from the user image.
-   - DO NOT alter face shape, facial hair, or hairstyle.
-   - Skin tone must match exactly across face, neck, hands, and all visible body parts.
-2) Product fidelity:
-   - Reproduce product color, texture, and hardware EXACTLY from product images.
-   - Keep logos readable and at correct location/scale.
-   - Match product dimensions and proportions to reference images.
-3) SINGLE PERSON ENFORCEMENT (CRITICAL):
-   - MUST generate EXACTLY ONE person in the image - NO exceptions
-   - NO multiple people, NO multiple poses, NO duplicate subjects, NO clones, NO overlapping figures
-   - NO composite images with multiple views/poses of the same person
-   - NO overlapping big foreground crops, NO partial floating limbs
-   - The output must be ONE person in ONE natural pose only
-4) Scale & anatomical constraints:
-   - Person must have realistic adult proportions (approx. 7–8 head heights).
-   - If reconstructing body, use standard adult proportions based on face-to-body ratio.
-   - All body parts must be anatomically correct and proportional.
+POSE & FRAMING:
+- {{TARGET_FRAMING}}: {{POSE_DESCRIPTION}}
+- Camera: {{CAMERA_HINT}}
+- Background: {{BACKGROUND_INSTRUCTION}}
 
-IDENTITY & POSE:
-Extracted user characteristics: {{USER_CHARACTERISTICS_JSON}}. Preserve these identity attributes EXACTLY: face shape, facial hair, hairline, eye shape, and skin tone.
-
-CRITICAL GENDER SPECIFICATION:
-The person in the generated image MUST be {{USER_GENDER}} (unless "unknown" is specified, then infer from user photo). When {{USER_GENDER}} is specified as "male" or "female", the physical features, body proportions, and overall appearance must accurately reflect {{USER_GENDER}} characteristics. Use realistic and natural {{USER_GENDER}} anatomical features, bone structure, and body proportions.
-
-{{CATEGORY_SPECIFIC_INSTRUCTIONS}}
-
-Pose & framing (MANDATORY):
-- forcePoseChange is true. Ignore the user's original camera angle and pose.
-- Target framing: {{TARGET_FRAMING}}
-- Pose description: {{POSE_DESCRIPTION}}
-- CRITICAL: Generate EXACTLY ONE person in ONE natural pose. NO multiple poses, NO multiple figures, NO composite views.
-- The person must be shown in a single, simple standing pose that showcases the product naturally.
-- When reconstructing full-body from head-only: build a realistic adult body using neutral fitted clothing (simple t-shirt + tapered pants) with ~7–8 head heights and natural proportions. Still only ONE person in ONE pose.
-- ALWAYS replace background with studio: {{BACKGROUND_INSTRUCTION}}
-
-SCALE CONSTRAINT (MANDATORY):
-- Match product size to productScaleCategory ({{PRODUCT_SCALE_CATEGORY}}) and productScaleRatioToHead ({{PRODUCT_SCALE_RATIO}}).
-- Target product width ≈ {{PRODUCT_SCALE_RATIO}} × user's head width (use face width from user image).
-- Do not exceed +/- 20% of this target.
-- If product would be larger than real-life proportions, reduce camera focal length or zoom out.
+SCALE: Product width = {{PRODUCT_SCALE_RATIO}}x head width
 
 {{CLOTHING_SWAP_INSTRUCTIONS}}
 
-PHOTOGRAPHY SPECIFICATIONS:
-- Camera hint (apply exactly): {{CAMERA_HINT}}
-- Studio background: {{BACKGROUND_INSTRUCTION}}
-- Lighting: softbox key + soft fill, gentle rim light to separate subject from background.
-- Lens: 50–85mm equivalent. Depth of field: slight background blur but both face and product in acceptable focus.
-- Output look: Photorealistic, natural skin texture (no plastic smoothing), high-resolution (2K quality).
-- Logo placement rule: NEVER add logos or text onto reflective surfaces (lenses, shiny metal) unless the product reference clearly shows the logo at that exact location.
+{{CATEGORY_SPECIFIC_INSTRUCTIONS}}
 
-NEGATIVE PROMPT (MANDATORY):
-{{NEGATIVE_PROMPT}}
+STUDIO PHOTO:
+- Photorealistic, natural skin, 2K quality
+- Cinematic soft lighting: key + fill + rim (NO visible light stands/equipment in frame)
+- Professional photo shoot style with clean grey studio background
+- NO lighting setups visible, NO equipment visible
+- Do NOT add logos to reflective surfaces unless in product image
 
-GENERATOR CONTROL & QUALITY:
-- Use strong guidance scale / high fidelity (high guidance / low denoising).
-- Generate 1–3 variations and select the most anatomically consistent.
-- If face is modified or duplicates appear, automatically retry with higher guidance and different seed.
-
-PRODUCT CATEGORY: {{PRODUCT_CATEGORY}}
-PRODUCT SCALE CATEGORY: {{PRODUCT_SCALE_CATEGORY}}
-
-PRODUCT DETAILS:
-{{PRODUCT_DESCRIPTION}}
-
-IMAGE GENERATION INSTRUCTIONS FROM ANALYSIS:
-{{GEN_IMAGE_INSTRUCTIONS}}
-
-POSITIVE PROMPT:
 {{POSITIVE_PROMPT}}
 
-CRITICAL OUTPUT REQUIREMENTS:
-- Output MUST be EXACTLY ONE person in ONE pose only
-- NO multiple people, NO multiple poses, NO composite views
-- Single realistic studio photograph with one person wearing the product
-- Natural standing pose showcasing the product clearly
-- Clean studio background, professional product photography style`
+AVOID: {{NEGATIVE_PROMPT}}
+
+Product: {{PRODUCT_CATEGORY}} — {{PRODUCT_DESCRIPTION}}`
 
 /**
  * Category-specific instructions to inject into base template
@@ -250,66 +111,22 @@ export function getCategorySpecificInstructions(
 ): string {
   switch (categoryConfig.type) {
     case "HEADWEAR":
-      return `
-SPECIAL INSTRUCTIONS FOR HEADWEAR:
-- Focus on head-and-shoulders framing with product clearly visible.
-- Preserve exact facial features and head shape.
-- Product (sunglasses/glasses/hat) must fit naturally on head, not float or appear oversized.
-- Ensure product sits correctly: glasses on bridge of nose, hat/cap level on head.
-- Face should be the primary focus, product enhances rather than dominates.
-`
+      return `HEADWEAR: Product fits naturally on head. Face focus.`
 
     case "FOOTWEAR":
-      return `
-SPECIAL INSTRUCTIONS FOR FOOTWEAR:
-- MUST be full-body shot with feet clearly visible in foreground.
-- Shoes must fit naturally on feet, not float or appear disconnected.
-- Both feet must be visible and properly aligned (not overlapping unnaturally).
-- Natural standing pose with weight evenly distributed.
-- Ensure shoes are shown from the angle that best displays their design.
-- Feet should be positioned naturally (shoulder-width apart, facing forward or slight turn).
-`
+      return `FOOTWEAR: Full-body, both feet visible, natural fit.`
 
     case "CLOTHING_UPPER":
-      return `
-SPECIAL INSTRUCTIONS FOR UPPER BODY CLOTHING:
-- Frame to show three-quarter body (chest to waist/hips).
-- Garment must maintain exact fit characteristics from product reference (oversized stays oversized, fitted stays fitted).
-- Replace user's upper garment with product, preserving body shape underneath.
-- Clothing should drape naturally, following body contours.
-- Ensure sleeves, collars, and all garment details are visible and correctly positioned.
-`
+      return `CLOTHING_UPPER: Three-quarter body. Maintain fit style.`
 
     case "CLOTHING_LOWER":
-      return `
-SPECIAL INSTRUCTIONS FOR LOWER BODY CLOTHING:
-- MUST be full-body shot to showcase pants/shorts/skirt.
-- Garment must maintain exact fit from product reference (baggy stays baggy, slim-fit stays slim-fit).
-- Replace user's lower garment with product, preserving natural body proportions.
-- Ensure waistband sits correctly, pants/shorts drape naturally down legs.
-- Legs should be visible from hip to ankle (or to bottom of shorts).
-`
+      return `CLOTHING_LOWER: Full-body. Maintain fit style.`
 
     case "CLOTHING_FULL":
-      return `
-SPECIAL INSTRUCTIONS FOR FULL BODY GARMENTS:
-- MUST be full-body shot showing entire garment from top to bottom.
-- Replace user's clothing with the dress/jumpsuit/playsuit.
-- Garment must maintain exact silhouette and fit from product reference.
-- Ensure all garment features are visible (neckline, sleeves if any, hemline).
-- Natural standing pose that showcases the full garment.
-`
+      return `CLOTHING_FULL: Full-body. Maintain silhouette.`
 
     case "ACCESSORY_BODY":
-      return `
-SPECIAL INSTRUCTIONS FOR BODY ACCESSORIES (Jewelry/Watches):
-- For watches: mid-shot framing, wrist and watch clearly visible, positioned naturally.
-- For jewelry: head-and-shoulders to mid-shot depending on type (necklace = mid-shot, earrings = head-and-shoulders).
-- Accessories must be properly worn and positioned (not floating or misaligned).
-- Keep user's clothing as-is, only add/replace the accessory.
-- Ensure accessory is prominent but not overpowering.
-- For watches: show watch face clearly visible, band properly fitted around wrist.
-`
+      return `ACCESSORY_BODY: Properly worn, visible positioning.`
 
     case "ACCESSORY_CARRY":
       // Determine bag type from product category for specific instructions
@@ -317,20 +134,10 @@ SPECIAL INSTRUCTIONS FOR BODY ACCESSORIES (Jewelry/Watches):
       return getBagSpecificInstructions(bagType)
 
     case "ACCESSORY_OTHER":
-      return `
-SPECIAL INSTRUCTIONS FOR OTHER ACCESSORIES (Belts/Scarves/Gloves/etc):
-- Frame appropriately to show accessory clearly.
-- Accessory must be properly worn/positioned (belt around waist, scarf around neck/shoulders, gloves on hands).
-- Keep user's clothing as-is, only add the accessory.
-- Ensure accessory is visible and properly fitted.
-`
+      return `ACCESSORY_OTHER: Properly worn, clearly visible.`
 
     default:
-      return `
-SPECIAL INSTRUCTIONS:
-- Apply general try-on principles: preserve identity, show product clearly, natural pose.
-- Use three-quarter framing as default.
-`
+      return `Category: General try-on.`
   }
 }
 
@@ -344,45 +151,19 @@ export function getClothingSwapInstructions(categoryConfig: CategoryConfig): str
     case "ACCESSORY_BODY":
     case "ACCESSORY_CARRY":
     case "ACCESSORY_OTHER":
-      return `
-CLOTHING-SWAP RULES:
-- Keep user's clothing EXACTLY as shown in the user image.
-- Only add the accessory/product to the user.
-- Do NOT replace or modify existing clothing.
-`
+      return `Accessory: Keep clothing, add product.`
 
     case "CLOTHING_UPPER":
-      return `
-CLOTHING-SWAP RULES:
-- Replace ONLY the upper body garment (shirt/top/jacket/etc.) with the product.
-- Preserve body shape and skin exposure exactly.
-- Keep lower body clothing (pants/skirts) as shown in user image.
-- If user image doesn't show lower body, use neutral fitted pants.
-`
+      return `Clothing: Replace upper only.`
 
     case "CLOTHING_LOWER":
-      return `
-CLOTHING-SWAP RULES:
-- Replace ONLY the lower body garment (pants/shorts/skirt/etc.) with the product.
-- Preserve body shape and natural proportions.
-- Keep upper body clothing (shirt/top) as shown in user image.
-- If user image doesn't show upper body, use neutral fitted t-shirt.
-`
+      return `Clothing: Replace lower only.`
 
     case "CLOTHING_FULL":
-      return `
-CLOTHING-SWAP RULES:
-- Replace user's entire outfit with the dress/jumpsuit/playsuit product.
-- Preserve body shape and natural proportions.
-- Ensure the full garment covers appropriately based on its design.
-`
+      return `Clothing: Replace full outfit.`
 
     default:
-      return `
-CLOTHING-SWAP RULES:
-- If product is a garment, replace corresponding garment realistically.
-- If product is an accessory, keep clothing as-is and only add accessory.
-`
+      return `Clothing: Replace as needed.`
   }
 }
 
