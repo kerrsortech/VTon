@@ -126,8 +126,8 @@
 <!-- Load External CSS File -->
 {{ 'closelook-widgets.css' | asset_url | stylesheet_tag }}
 
-<!-- Load External JavaScript File -->
-{{ 'closelook-widgets.js' | asset_url | script_tag }}
+<!-- Load External JavaScript File - Using async for better performance -->
+<script src="{{ 'closelook-widgets.js' | asset_url }}" async></script>
 
 {% schema %}
 {
