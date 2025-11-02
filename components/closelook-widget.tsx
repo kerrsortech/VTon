@@ -1,8 +1,6 @@
 "use client"
 
-import type React from "react"
-
-import { useState, useRef, useEffect } from "react"
+import React, { useState, useRef, useEffect } from "react"
 import { Upload, X, Lock } from "lucide-react"
 import { useCloselook } from "@/components/closelook-provider"
 import type { Product, TryOnResult } from "@/lib/closelook-types"
