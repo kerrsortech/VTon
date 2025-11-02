@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { shopify } from "@/lib/shopify/auth"
 import { storeSession } from "@/lib/shopify/session-storage"
 import { logger } from "@/lib/server-logger"
-import { getOrCreateStore } from "@/lib/db/analytics"
+// COMMENTED OUT: Dashboard/Analytics functionality - will work on later
+// import { getOrCreateStore } from "@/lib/db/analytics"
 import type { ShopifySession } from "@/lib/shopify/types"
 
 /**
@@ -79,25 +80,25 @@ export async function GET(request: NextRequest) {
 
     await storeSession(session)
 
-    // Create or update store record in analytics database
-    try {
-      await getOrCreateStore(shop, shop.replace(".myshopify.com", ""), accessToken)
-      logger.info("Store record created/updated", { shop })
-    } catch (error) {
-      logger.error("Failed to create store record", { shop, error })
-      // Don't fail OAuth if analytics setup fails
-    }
+    // COMMENTED OUT: Dashboard/Analytics functionality - will work on later
+    // // Create or update store record in analytics database
+    // try {
+    //   await getOrCreateStore(shop, shop.replace(".myshopify.com", ""), accessToken)
+    //   logger.info("Store record created/updated", { shop })
+    // } catch (error) {
+    //   logger.error("Failed to create store record", { shop, error })
+    //   // Don't fail OAuth if analytics setup fails
+    // }
 
     logger.info("Shopify OAuth completed successfully", { shop })
 
-    // Redirect to admin dashboard
-    // Use SHOPIFY_APP_URL or construct from request headers to avoid localhost redirects
-    const appUrl = process.env.SHOPIFY_APP_URL || process.env.RENDER_EXTERNAL_URL || 
-                   `https://${request.headers.get("host") || "localhost:10000"}`
-    const adminUrl = `${appUrl}/admin?shop=${encodeURIComponent(shop)}`
+    // Redirect back to Shopify Admin - App is installed
+    // User can now add the chatbot blocks to their theme
+    const apiKey = process.env.SHOPIFY_API_KEY
+    const shopifyAdminUrl = `https://${shop}/admin/apps/${apiKey}`
     
-    logger.info("Redirecting to admin dashboard", { shop, adminUrl })
-    return NextResponse.redirect(adminUrl)
+    logger.info("Redirecting to Shopify admin", { shop, shopifyAdminUrl })
+    return NextResponse.redirect(shopifyAdminUrl)
   } catch (error) {
     logger.error("Shopify OAuth callback error", { error })
     return NextResponse.json(
