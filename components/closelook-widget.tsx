@@ -191,7 +191,6 @@ export function CloselookWidget({ product, onTryOnComplete, className }: Closelo
       if (typeof window !== "undefined") {
         const shopDomain = (window as any).Shopify?.shop || 
                           (window as any).shopDomain ||
-                          (product.metadata?.shopDomain as string) ||
                           null
         if (shopDomain) {
           formData.append("shopDomain", shopDomain)
