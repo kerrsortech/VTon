@@ -38,11 +38,22 @@ export function init(config: WidgetConfig) {
 
   // Override fetch to use the provided API URL
   const originalFetch = window.fetch
-  const apiBaseUrl = apiUrl.replace("/api", "")
   
   // Override /api/try-on calls to use the provided API URL
   window.fetch = ((...args) => {
-    const url = typeof args[0] === "string" ? args[0] : args[0].url
+    const firstArg = args[0]
+    let url: string
+    if (typeof firstArg === "string") {
+      url = firstArg
+    } else if (firstArg instanceof Request) {
+      url = firstArg.url
+    } else if (firstArg instanceof URL) {
+      url = firstArg.toString()
+    } else {
+      // Fallback for other types
+      return originalFetch(...args)
+    }
+    
     if (url && url.startsWith("/api/")) {
       const newUrl = apiUrl + url.replace("/api", "")
       return originalFetch(newUrl, args[1])
@@ -54,12 +65,10 @@ export function init(config: WidgetConfig) {
   const root = createRoot(container)
   
   root.render(
-    React.createElement(
-      CloselookProvider,
-      {},
-      React.createElement(CloselookWidget, {
-        product: closelookProduct,
-        onTryOnComplete: (result) => {
+    <CloselookProvider>
+      <CloselookWidget
+        product={closelookProduct}
+        onTryOnComplete={(result) => {
           console.log("Try-on complete:", result)
           // Optionally dispatch a custom event
           window.dispatchEvent(
@@ -67,10 +76,10 @@ export function init(config: WidgetConfig) {
               detail: { productId: closelookProduct.id, result },
             })
           )
-        },
-        className: "closelook-widget-shopify",
-      })
-    )
+        }}
+        className="closelook-widget-shopify"
+      />
+    </CloselookProvider>
   )
 
   // Clean up function (if needed)
