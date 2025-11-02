@@ -93,11 +93,10 @@ export async function GET(request: NextRequest) {
     logger.info("Shopify OAuth completed successfully", { shop })
 
     // Redirect back to Shopify Admin - App is installed
-    // User can now add the chatbot blocks to their theme
-    const apiKey = process.env.SHOPIFY_API_KEY
-    const shopifyAdminUrl = `https://${shop}/admin/apps/${apiKey}`
+    // User can now enable the chatbot in theme customizer under "App embeds"
+    const shopifyAdminUrl = `https://${shop}/admin/themes`
     
-    logger.info("Redirecting to Shopify admin", { shop, shopifyAdminUrl })
+    logger.info("Redirecting to Shopify themes", { shop, shopifyAdminUrl })
     return NextResponse.redirect(shopifyAdminUrl)
   } catch (error) {
     logger.error("Shopify OAuth callback error", { error })

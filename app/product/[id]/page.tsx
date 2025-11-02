@@ -1,44 +1,30 @@
+// COMMENTED OUT: Demo product page - hidden from production
+// This demo product page is only for development/testing purposes
+
+import { notFound } from "next/navigation"
+
+export default async function ProductPage() {
+  // Return a simple message instead of the demo product page
+  return (
+    <div className="min-h-screen bg-white flex items-center justify-center">
+      <div className="text-center">
+        <h1 className="text-2xl font-bold mb-4">Closelook Shopify App</h1>
+        <p className="text-gray-600">This is the backend API server for the Closelook Shopify app.</p>
+        <p className="text-gray-600 mt-2">Install the app in your Shopify store to use the chatbot features.</p>
+      </div>
+    </div>
+  )
+}
+
+/*
+COMMENTED OUT: Demo product page code - hidden from production
+This was the demo product page used for testing
+
 import { notFound } from "next/navigation"
 import { getCloselookPlugin } from "@/lib/closelook-plugin"
 import { ProductView } from "@/components/product-view"
 import type { Product } from "@/lib/closelook-types"
 import type { CloselookProduct } from "@/lib/closelook-plugin/types"
 
-interface ProductPageProps {
-  params: Promise<{
-    id: string
-  }>
-}
-
-// Helper to convert CloselookProduct to Product for compatibility
-function closelookProductToProduct(closelookProduct: CloselookProduct): Product {
-  return {
-    id: closelookProduct.id,
-    name: closelookProduct.name,
-    category: closelookProduct.category,
-    type: closelookProduct.type,
-    color: closelookProduct.color,
-    price: closelookProduct.price,
-    images: closelookProduct.images,
-    description: closelookProduct.description,
-    sizes: closelookProduct.sizes,
-  }
-}
-
-export default async function ProductPage({ params }: ProductPageProps) {
-  const { id } = await params
-  
-  // Use the plugin adapter (currently using demo adapter, but demonstrates Shopify adapter pattern)
-  const plugin = getCloselookPlugin()
-  const adapter = plugin.getAdapter()
-  const closelookProduct = await adapter.getProduct(id)
-
-  if (!closelookProduct) {
-    notFound()
-  }
-
-  // Convert to Product type for ProductView component
-  const product = closelookProductToProduct(closelookProduct)
-
-  return <ProductView product={product} />
-}
+[rest of demo code...]
+*/
