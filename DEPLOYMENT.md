@@ -22,6 +22,7 @@ Complete deployment guide for the Closelook Virtual Try-On Shopify Plugin and An
 1. **Shopify Partner Account**
    - Sign up at https://partners.shopify.com
    - Create a new app in the Partners Dashboard
+   - 📘 **Detailed setup guide**: [SHOPIFY_ACCOUNT_SETUP.md](./SHOPIFY_ACCOUNT_SETUP.md)
 
 2. **Hosting Provider** (Choose one):
    - Render (recommended for simplicity)

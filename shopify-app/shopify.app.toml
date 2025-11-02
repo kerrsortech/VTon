@@ -1,22 +1,24 @@
-# Shopify App Configuration
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-[application]
+client_id = "95615e8665f0cb731eab0dbd66b69ebd"
 name = "Closelook Virtual Try-On"
-client_id = "YOUR_SHOPIFY_API_KEY"
 application_url = "https://your-app.onrender.com"
 embedded = true
 
+[webhooks]
+api_version = "2024-01"
+uninstall_url = "https://your-app.onrender.com/api/shopify/webhooks/app-uninstalled"
+
 [access_scopes]
-scopes = "read_products,read_content"
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_products,read_content,read_orders,read_customers,write_customers"
+optional_scopes = [ ]
+use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
   "https://your-app.onrender.com/api/shopify/auth/oauth"
 ]
-
-[webhooks]
-api_version = "2024-01"
-uninstall_url = "https://your-app.onrender.com/api/shopify/webhooks/app-uninstalled"
 
 [pos]
 embedded = false
@@ -25,4 +27,3 @@ embedded = false
 url = "https://your-app.onrender.com"
 subpath = "apps"
 prefix = "closelook"
-

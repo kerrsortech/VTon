@@ -10,6 +10,7 @@ Before you begin, you need:
 
 1. **Shopify Partners Account** (free)
    - Sign up at: https://partners.shopify.com
+   - **📘 Need detailed setup? See [SHOPIFY_ACCOUNT_SETUP.md](./SHOPIFY_ACCOUNT_SETUP.md)**
 
 2. **Hosting Account** (choose one):
    - **Render** (recommended, free tier available): https://render.com

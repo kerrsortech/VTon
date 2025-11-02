@@ -66,6 +66,7 @@ Follow the complete deployment guide to get your plugin live in under 1 hour.
 Follow the step-by-step guide in `DEPLOY.md` to deploy your plugin to Shopify stores in under 1 hour. Perfect for junior developers!
 
 For more detailed information:
+- **Shopify account setup**: [SHOPIFY_ACCOUNT_SETUP.md](./SHOPIFY_ACCOUNT_SETUP.md) - **Start here if you need a Shopify Partners account!**
 - Database setup: [DATABASE_SETUP.md](./DATABASE_SETUP.md)
 - Dashboard setup: [DASHBOARD_SETUP.md](./DASHBOARD_SETUP.md)
 - Production readiness: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md)
