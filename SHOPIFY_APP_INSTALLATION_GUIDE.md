@@ -60,11 +60,18 @@ This guide will walk you through making your Closelook Virtual Try-On app availa
 
 2. **Install Your App**
    - Go to: `https://vton-1-hqmc.onrender.com/install?shop=YOUR-DEV-STORE.myshopify.com`
-   - Replace `YOUR-DEV-STORE` with your development store name
+   - **Important:** Replace `YOUR-DEV-STORE` with your development store name
+   - The shop parameter must be in the format: `store-name.myshopify.com` (must end with `.myshopify.com`)
+   - Example: `https://vton-1-hqmc.onrender.com/install?shop=my-test-store.myshopify.com`
    - Click "Install App"
    - You'll be redirected to Shopify OAuth
    - Authorize the app
    - You'll be redirected back to your admin dashboard
+
+   **Common Issues:**
+   - ❌ Missing `.myshopify.com` suffix: `?shop=my-store` → ✅ `?shop=my-store.myshopify.com`
+   - ❌ Wrong format: `?shop=https://my-store.myshopify.com` → ✅ `?shop=my-store.myshopify.com`
+   - ❌ Extra spaces: `?shop= my-store.myshopify.com ` → ✅ `?shop=my-store.myshopify.com`
 
 ### Step 4: Publish Your App (Optional - for Shopify App Store)
 
@@ -153,8 +160,13 @@ If you see this error when clicking "Install App":
 
 2. **Verify Shop Parameter**
    - Ensure the URL includes a valid shop parameter: `/install?shop=your-store.myshopify.com`
-   - The shop must end with `.myshopify.com`
+   - The shop must end with `.myshopify.com` (not just `myshopify.com`)
    - Example: `https://vton-1-hqmc.onrender.com/install?shop=your-dev-store.myshopify.com`
+   - **Common mistakes:**
+     - ❌ `?shop=your-store` (missing `.myshopify.com`)
+     - ❌ `?shop=https://your-store.myshopify.com` (includes protocol)
+     - ❌ `?shop=your-store.myshopify.com ` (trailing space)
+     - ✅ `?shop=your-store.myshopify.com` (correct format)
 
 3. **Check App Configuration**
    - Verify your app is created in Shopify Partners Dashboard

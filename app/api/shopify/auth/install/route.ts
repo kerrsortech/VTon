@@ -38,10 +38,31 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    // Extract and validate shop parameter
+    const url = new URL(request.url)
+    const shopParam = url.searchParams.get("shop")
+    
+    logger.info("OAuth install request received", { 
+      url: request.url,
+      shopParam,
+      allParams: Object.fromEntries(url.searchParams.entries())
+    })
+    
     const shop = extractShopDomain(request)
     if (!shop) {
+      logger.error("Shop parameter validation failed", { 
+        shopParam,
+        url: request.url,
+        hasShopParam: !!shopParam
+      })
       return NextResponse.json(
-        { error: "Missing or invalid shop parameter", details: "The 'shop' query parameter must be a valid .myshopify.com domain" },
+        { 
+          error: "Missing or invalid shop parameter", 
+          details: shopParam 
+            ? `The shop parameter "${shopParam}" is invalid. It must be a valid .myshopify.com domain (e.g., "your-store.myshopify.com")`
+            : "The 'shop' query parameter is required and must be a valid .myshopify.com domain",
+          received: shopParam || "none"
+        },
         { status: 400 }
       )
     }

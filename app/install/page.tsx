@@ -19,8 +19,17 @@ function InstallPageContent() {
     }
 
     setInstalling(true)
-    // Redirect to OAuth install endpoint
-    window.location.href = `/api/shopify/auth/install?shop=${shop}`
+    // Ensure shop parameter is properly formatted and encoded
+    const cleanedShop = shop.trim()
+    if (!cleanedShop.endsWith(".myshopify.com")) {
+      alert(`Invalid shop domain: ${cleanedShop}. It must end with .myshopify.com`)
+      setInstalling(false)
+      return
+    }
+    
+    // Redirect to OAuth install endpoint with properly encoded shop parameter
+    const encodedShop = encodeURIComponent(cleanedShop)
+    window.location.href = `/api/shopify/auth/install?shop=${encodedShop}`
   }
 
   return (

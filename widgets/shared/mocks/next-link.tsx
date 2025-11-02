@@ -2,7 +2,7 @@
  * Mock Next.js Link component for standalone widget environment
  */
 
-import React from "react"
+import type React from "react"
 
 interface LinkProps {
   href: string
@@ -12,7 +12,7 @@ interface LinkProps {
 }
 
 export function Link({ href, children, className, onClick }: LinkProps) {
-  const handleClick = (e: React.MouseEvent) => {
+  const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault()
     if (onClick) {
       onClick()

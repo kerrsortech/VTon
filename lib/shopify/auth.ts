@@ -4,6 +4,7 @@
 
 import { shopifyApi, ApiVersion } from "@shopify/shopify-api"
 import "@shopify/shopify-api/adapters/node"
+import type { NextRequest } from "next/server"
 
 // Lazy initialization to avoid build-time errors when env vars are missing
 let shopifyInstance: ReturnType<typeof shopifyApi> | null = null
@@ -113,12 +114,34 @@ export function validateHmac(hmac: string, query: Record<string, string | string
 /**
  * Extract shop domain from request
  */
-export function extractShopDomain(request: Request): string | null {
-  const url = new URL(request.url)
-  const shop = url.searchParams.get("shop")
-  if (shop && shop.endsWith(".myshopify.com")) {
-    return shop
+export function extractShopDomain(request: Request | NextRequest): string | null {
+  try {
+    const url = new URL(request.url)
+    const shop = url.searchParams.get("shop")
+    
+    if (!shop) {
+      return null
+    }
+    
+    // Clean the shop parameter (trim whitespace, handle encoding)
+    const cleanedShop = shop.trim()
+    
+    // Validate shop domain format
+    // Must end with .myshopify.com
+    if (!cleanedShop.endsWith(".myshopify.com")) {
+      return null
+    }
+    
+    // Basic validation: should be a valid domain format
+    // Should not contain spaces or invalid characters
+    if (cleanedShop.includes(" ") || cleanedShop.length < 14) { // minimum: x.myshopify.com
+      return null
+    }
+    
+    return cleanedShop
+  } catch (error) {
+    // If URL parsing fails, return null
+    return null
   }
-  return null
 }
 
