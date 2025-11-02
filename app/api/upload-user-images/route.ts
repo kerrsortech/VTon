@@ -3,6 +3,12 @@ import { type NextRequest, NextResponse } from "next/server"
 import { logger } from "@/lib/server-logger"
 import { validateUserPhoto } from "@/lib/production-validators"
 import { saveUserImage, type UserImage } from "@/lib/db/user-images"
+import { addCorsHeaders, createCorsPreflightResponse } from "@/lib/cors-headers"
+
+// Handle OPTIONS requests for CORS preflight
+export async function OPTIONS(request: NextRequest) {
+  return createCorsPreflightResponse(request)
+}
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now()
@@ -168,11 +174,11 @@ export async function POST(request: NextRequest) {
       logger.info("Set new user ID cookie", { requestId, userId })
     }
 
-    return response
+    return addCorsHeaders(response, request)
   } catch (error) {
     logger.error("User image upload request failed", { requestId, error: error instanceof Error ? error.message : String(error) })
     
-    return NextResponse.json(
+    const response = NextResponse.json(
       {
         error: "Upload failed",
         details: error instanceof Error ? error.message : "An unexpected error occurred",
@@ -180,6 +186,8 @@ export async function POST(request: NextRequest) {
       },
       { status: 500 },
     )
+
+    return addCorsHeaders(response, request)
   }
 }
 

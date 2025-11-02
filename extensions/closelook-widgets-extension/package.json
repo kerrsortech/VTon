@@ -1,0 +1,6 @@
+{
+  "name": "closelook-widgets-extension",
+  "version": "1.0.0",
+  "description": "Closelook AI Widgets Extension for Shopify",
+  "main": "index.js"
+}

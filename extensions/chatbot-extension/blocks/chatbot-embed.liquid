@@ -1,0 +1,70 @@
+<!-- AI Chatbot & Virtual Try-On Widgets Container -->
+<div id="shopify-chatbot-widget"></div>
+<div id="shopify-try-on-widget"></div>
+
+<!-- Load your chatbot script -->
+{% if block.settings.enable_chatbot %}
+<script>
+  window.chatbotConfig = {
+    backendUrl: '{{ block.settings.backend_url }}',
+    shopDomain: '{{ shop.domain }}',
+    storeId: '{{ shop.id }}',
+    customerId: '{{ customer.id | default: null }}'
+  };
+
+  // Load chatbot initialization
+  (function() {
+    var script = document.createElement('script');
+    script.src = '{{ "chatbot-widget.js" | asset_url }}';
+    script.async = true;
+    document.body.appendChild(script);
+  })();
+</script>
+{% endif %}
+
+<!-- Load your try-on script -->
+{% if block.settings.enable_try_on %}
+<script>
+  window.tryOnConfig = {
+    backendUrl: '{{ block.settings.backend_url }}',
+    shopDomain: '{{ shop.domain }}',
+    storeId: '{{ shop.id }}',
+    customerId: '{{ customer.id | default: null }}'
+  };
+
+  // Load try-on initialization
+  (function() {
+    var script = document.createElement('script');
+    script.src = '{{ "try-on-widget.js" | asset_url }}';
+    script.async = true;
+    document.body.appendChild(script);
+  })();
+</script>
+{% endif %}
+
+{% schema %}
+{
+  "name": "Closelook AI Widgets",
+  "target": "body",
+  "settings": [
+    {
+      "type": "text",
+      "id": "backend_url",
+      "label": "Backend API URL",
+      "default": "https://vton-1-hqmc.onrender.com"
+    },
+    {
+      "type": "checkbox",
+      "id": "enable_chatbot",
+      "label": "Enable AI Chatbot",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "enable_try_on",
+      "label": "Enable Virtual Try-On",
+      "default": true
+    }
+  ]
+}
+{% endschema %}

@@ -92,12 +92,13 @@ export async function GET(request: NextRequest) {
 
     logger.info("Shopify OAuth completed successfully", { shop })
 
-    // Redirect back to Shopify Admin - App is installed
-    // User can now enable the chatbot in theme customizer under "App embeds"
-    const shopifyAdminUrl = `https://${shop}/admin/themes`
+    // Redirect to our admin page with instructions on how to enable the chatbot
+    // This provides a better user experience than redirecting to Shopify admin
+    const appUrl = process.env.SHOPIFY_APP_URL || process.env.RENDER_EXTERNAL_URL || "https://vton-1-hqmc.onrender.com"
+    const adminUrl = `${appUrl}/admin?shop=${encodeURIComponent(shop)}`
     
-    logger.info("Redirecting to Shopify themes", { shop, shopifyAdminUrl })
-    return NextResponse.redirect(shopifyAdminUrl)
+    logger.info("Redirecting to admin page with setup instructions", { shop, adminUrl })
+    return NextResponse.redirect(adminUrl)
   } catch (error) {
     logger.error("Shopify OAuth callback error", { error })
     return NextResponse.json(

@@ -1,0 +1,157 @@
+<!-- AI Chatbot & Virtual Try-On Widgets - Exact Copy of Original UI -->
+
+<!-- Chat Button - Glassmorphic Design -->
+{% if block.settings.enable_chatbot %}
+<div id="chatbot-button-container" class="chatbot-button-container">
+  <div id="chatbot-first-click" class="chatbot-first-click">
+    <div class="chatbot-shine"></div>
+    <button id="chatbot-open-btn" class="chatbot-button-first">
+      <svg class="chatbot-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+      </svg>
+    </button>
+  </div>
+  <button id="chatbot-toggle-btn" class="chatbot-button-toggle" style="display: none;">
+    <svg id="chatbot-icon-message" class="chatbot-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+    </svg>
+    <svg id="chatbot-icon-close" class="chatbot-icon-svg" style="display: none;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <line x1="18" y1="6" x2="6" y2="18"></line>
+      <line x1="6" y1="6" x2="18" y2="18"></line>
+    </svg>
+  </button>
+</div>
+
+<!-- Chat Window - Standard Size & White Design -->
+<div id="chatbot-panel" class="chatbot-panel">
+  <!-- Header - Simple White Design -->
+  <div class="chatbot-header">
+    <!-- Animated gradient blob circle - Left side -->
+    <div class="chatbot-header-blob-container">
+      <div class="chatbot-header-blob"></div>
+    </div>
+    
+    <!-- Content - Middle -->
+    <div class="chatbot-header-content">
+      <h3 class="chatbot-header-title">Hi, I'm your shopping assistant</h3>
+      <p id="chatbot-product-info" class="chatbot-header-subtitle" style="display: none;">
+        Currently viewing <span class="chatbot-product-name"></span>
+      </p>
+    </div>
+    
+    <!-- Close button - Right top -->
+    <button id="chatbot-close-btn" class="chatbot-header-close">
+      <svg class="chatbot-close-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="18" y1="6" x2="6" y2="18"></line>
+        <line x1="6" y1="6" x2="18" y2="18"></line>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Actions Section - Try Virtual Try On + Icons -->
+  <div class="chatbot-actions">
+    <!-- Try Virtual Try On Button -->
+    <button id="chatbot-try-on-btn" class="chatbot-try-on-button" disabled>
+      <svg class="chatbot-sparkles-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"></path>
+      </svg>
+      Try on this product
+    </button>
+
+    <!-- Upload Widget Button -->
+    <div class="chatbot-upload-wrapper">
+      <button id="chatbot-upload-btn" class="chatbot-upload-button">
+        <svg id="chatbot-upload-spinner" class="chatbot-upload-spinner" style="display: none;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="12" y1="2" x2="12" y2="6"></line>
+          <line x1="12" y1="18" x2="12" y2="22"></line>
+          <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line>
+          <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line>
+          <line x1="2" y1="12" x2="6" y2="12"></line>
+          <line x1="18" y1="12" x2="22" y2="12"></line>
+          <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
+          <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
+        </svg>
+        <svg id="chatbot-upload-icon" class="chatbot-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="17 8 12 3 7 8"></polyline>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+        </svg>
+      </button>
+      
+      <!-- Error Message -->
+      <div id="chatbot-upload-error" class="chatbot-upload-error" style="display: none;">
+        <p class="chatbot-error-title">Error</p>
+        <p class="chatbot-error-message"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Messages -->
+  <div class="chatbot-messages-container">
+    <div id="chatbot-messages" class="chatbot-messages">
+      <div class="chatbot-message chatbot-message-assistant">
+        <div class="chatbot-message-bubble chatbot-message-bubble-assistant">
+          <p class="chatbot-message-text">How may I help you?</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Templates -->
+  <div id="chatbot-templates" class="chatbot-templates" style="display: none;">
+    <!-- Templates will be injected by JavaScript -->
+  </div>
+
+  <!-- Input -->
+  <div class="chatbot-input-container">
+    <div class="chatbot-input-row">
+      <input
+        id="chatbot-input"
+        type="text"
+        placeholder="Type your message..."
+        class="chatbot-input-field"
+        disabled
+      />
+      <button id="chatbot-send-btn" class="chatbot-send-button" disabled>
+        <svg class="chatbot-send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="22" y1="2" x2="11" y2="13"></line>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        </svg>
+      </button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Load External CSS File -->
+{{ 'closelook-widgets.css' | asset_url | stylesheet_tag }}
+
+<!-- Load External JavaScript File -->
+{{ 'closelook-widgets.js' | asset_url | script_tag }}
+
+{% schema %}
+{
+  "name": "Closelook AI Widgets",
+  "target": "body",
+  "settings": [
+    {
+      "type": "text",
+      "id": "backend_url",
+      "label": "Backend API URL",
+      "default": "https://vton-1-hqmc.onrender.com"
+    },
+    {
+      "type": "checkbox",
+      "id": "enable_chatbot",
+      "label": "Enable AI Chatbot",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "enable_try_on",
+      "label": "Enable Virtual Try-On",
+      "default": true
+    }
+  ]
+}
+{% endschema %}

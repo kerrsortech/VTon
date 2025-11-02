@@ -26,6 +26,12 @@ import {
   validatePromptQuality,
 } from "@/lib/production-enhancements"
 import { logger, sanitizeErrorForClient } from "@/lib/server-logger"
+import { addCorsHeaders, createCorsPreflightResponse } from "@/lib/cors-headers"
+
+// Handle OPTIONS requests for CORS preflight
+export async function OPTIONS(request: NextRequest) {
+  return createCorsPreflightResponse(request)
+}
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now()
@@ -486,7 +492,7 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       imageUrl,
       productName,
       metadata: {
@@ -515,6 +521,8 @@ export async function POST(request: NextRequest) {
         },
       },
     })
+    
+    return addCorsHeaders(response, request)
   } catch (error) {
     logger.error("Try-on request failed", { requestId, error: error instanceof Error ? error.message : String(error) })
     const sanitizedError = sanitizeErrorForClient(error, requestId)
@@ -528,6 +536,7 @@ export async function POST(request: NextRequest) {
       statusCode = 504
     }
     
-    return NextResponse.json(sanitizedError, { status: statusCode })
+    const response = NextResponse.json(sanitizedError, { status: statusCode })
+    return addCorsHeaders(response, request)
   }
 }

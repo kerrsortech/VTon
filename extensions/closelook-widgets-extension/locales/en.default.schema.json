@@ -1,0 +1,8 @@
+{
+  "chatbot": {
+    "settings": {
+      "backend_url": "Backend API URL",
+      "enable_widget": "Enable Chatbot"
+    }
+  }
+}

@@ -101,7 +101,7 @@ export async function GET(request: NextRequest) {
     }
 
     logger.info("Redirecting to Shopify OAuth", { shop, authUrl })
-    
+
     // Redirect to Shopify OAuth
     return NextResponse.redirect(authUrl)
   } catch (error: any) {

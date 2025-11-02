@@ -20,8 +20,14 @@ import {
 import { createCustomerNote } from "@/lib/shopify/ticket-system"
 import { extractTicketRequest } from "@/lib/ticket-extractor"
 import { validateChatInput } from "@/lib/production-validation"
+import { addCorsHeaders, createCorsPreflightResponse, isAllowedOrigin } from "@/lib/cors-headers"
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "")
+
+// Handle OPTIONS requests for CORS preflight
+export async function OPTIONS(request: NextRequest) {
+  return createCorsPreflightResponse(request)
+}
 
 // Validate API key on startup
 if (!process.env.GOOGLE_GEMINI_API_KEY) {
@@ -698,11 +704,13 @@ export async function POST(request: NextRequest) {
       responseMessage = `${responseMessage}\n\n✅ ${ticketMessage}`
     }
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       message: responseMessage,
       recommendations: finalRecommendations,
       ticketCreated,
     })
+    
+    return addCorsHeaders(response, request)
   } catch (error: any) {
     logger.error("Chat API Error", { error: error.message })
     const sanitizedError = sanitizeErrorForClient(error)
@@ -717,6 +725,7 @@ export async function POST(request: NextRequest) {
       statusCode = 504
     }
     
-    return NextResponse.json(sanitizedError, { status: statusCode })
+    const response = NextResponse.json(sanitizedError, { status: statusCode })
+    return addCorsHeaders(response, request)
   }
 }

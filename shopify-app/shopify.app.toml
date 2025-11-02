@@ -3,7 +3,7 @@
 client_id = "95615e8665f0cb731eab0dbd66b69ebd"
 name = "Closelook Virtual Try-On"
 application_url = "https://vton-1-hqmc.onrender.com"
-embedded = true
+embedded = false
 
 [webhooks]
 api_version = "2025-01"
@@ -13,6 +13,7 @@ uninstall_url = "https://vton-1-hqmc.onrender.com/api/shopify/webhooks/app-unins
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_products,read_content,read_orders,read_customers,write_customers"
 optional_scopes = [ ]
+
 use_legacy_install_flow = false
 
 [auth]
@@ -23,7 +24,10 @@ redirect_urls = [
 [pos]
 embedded = false
 
-[app_proxy]
-url = "https://vton-1-hqmc.onrender.com"
-subpath = "apps"
-prefix = "apps"
+# App proxy is NOT needed for theme app extensions
+# Widgets load directly from the app URL (https://vton-1-hqmc.onrender.com/widgets/chatbot-widget.js)
+# Uncomment below only if you need app proxy for other purposes (like proxying API calls)
+# [app_proxy]
+# url = "https://vton-1-hqmc.onrender.com"
+# subpath = "closelook"
+# prefix = "apps"

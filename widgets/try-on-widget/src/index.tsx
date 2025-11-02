@@ -33,6 +33,12 @@ export function init(config: WidgetConfig) {
 
   const { container, product, shopDomain, apiUrl } = config
 
+  // Only initialize if we have a product
+  if (!product) {
+    console.warn("Closelook: No product data available, try-on widget will not initialize")
+    return
+  }
+
   // Map Shopify product to Closelook format
   const closelookProduct: Product = mapToCloselookProduct(product, shopDomain)
 

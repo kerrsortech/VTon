@@ -56,7 +56,7 @@ function getShopifyInstance() {
     scopes,
     hostName: host.replace(/https?:\/\//, ""),
     apiVersion: ApiVersion.July25,
-    isEmbeddedApp: true,
+    isEmbeddedApp: false, // Must be false for theme app extensions
   })
 
   return shopifyInstance
