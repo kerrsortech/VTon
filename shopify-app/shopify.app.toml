@@ -2,12 +2,12 @@
 
 client_id = "95615e8665f0cb731eab0dbd66b69ebd"
 name = "Closelook Virtual Try-On"
-application_url = "https://your-app.onrender.com"
+application_url = "https://vton-1-hqmc.onrender.com"
 embedded = true
 
 [webhooks]
-api_version = "2024-01"
-uninstall_url = "https://your-app.onrender.com/api/shopify/webhooks/app-uninstalled"
+api_version = "2025-01"
+uninstall_url = "https://vton-1-hqmc.onrender.com/api/shopify/webhooks/app-uninstalled"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
@@ -17,13 +17,13 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://your-app.onrender.com/api/shopify/auth/oauth"
+  "https://vton-1-hqmc.onrender.com/api/shopify/auth/oauth"
 ]
 
 [pos]
 embedded = false
 
 [app_proxy]
-url = "https://your-app.onrender.com"
+url = "https://vton-1-hqmc.onrender.com"
 subpath = "apps"
 prefix = "closelook"
