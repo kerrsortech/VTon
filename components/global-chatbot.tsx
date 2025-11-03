@@ -71,6 +71,60 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
   
   const { setGeneratingProductId, userImages, setUserImages } = useCloselook()
 
+  // Check if user has uploaded images
+  const hasUploadedImages = userImages.fullBodyUrl || userImages.halfBodyUrl
+
+  // Fetch existing user images on mount
+  useEffect(() => {
+    // Skip if images are already loaded
+    if (hasUploadedImages) {
+      return
+    }
+
+    const fetchUserImages = async () => {
+      try {
+        // Get Shopify customer ID from window if available (for Shopify stores)
+        const shopifyCustomerId = typeof window !== "undefined" 
+          ? (window as any).Shopify?.customer?.id 
+          : null
+
+        const headers: HeadersInit = {}
+        if (shopifyCustomerId) {
+          headers["x-shopify-customer-id"] = shopifyCustomerId.toString()
+        }
+
+        const response = await fetch("/api/user-images", {
+          method: "GET",
+          headers,
+          credentials: "include", // Include cookies for anonymous user ID
+        })
+
+        if (response.ok) {
+          const result = await response.json()
+          if (result.images && (result.images.fullBodyUrl || result.images.halfBodyUrl)) {
+            setUserImages({
+              fullBodyUrl: result.images.fullBodyUrl,
+              halfBodyUrl: result.images.halfBodyUrl,
+            })
+            logger.info("User images loaded from server", {
+              hasFullBody: !!result.images.fullBodyUrl,
+              hasHalfBody: !!result.images.halfBodyUrl,
+            })
+          }
+        } else if (response.status !== 400) {
+          // Log non-client errors (400 means no user ID, which is expected for new users)
+          logger.warn("Failed to fetch user images:", response.status)
+        }
+      } catch (error) {
+        // Silently fail - user images might not exist yet
+        logger.debug("Could not fetch user images:", error)
+      }
+    }
+
+    fetchUserImages()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run on mount
+
   // Fetch products only when chatbot is opened for the first time
   useEffect(() => {
     if (!hasClickedOnce) return // Only fetch when user interacts
@@ -398,14 +452,50 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       formData.append("productType", currentProduct.type)
       formData.append("productColor", currentProduct.color)
 
+      // Send product page URL if available (for enhanced product analysis)
       if (currentProduct.url || (typeof window !== "undefined" && window.location.href)) {
         const productUrl = currentProduct.url || window.location.href
         formData.append("productUrl", productUrl)
       }
 
+      // Include analytics tracking data
+      formData.append("productId", currentProduct.id)
+      
+      // Get shop domain from window (for Shopify stores)
+      const headers: HeadersInit = {}
+      if (typeof window !== "undefined") {
+        const shopDomain = (window as any).Shopify?.shop || 
+                          (window as any).shopDomain ||
+                          null
+        if (shopDomain) {
+          formData.append("shopDomain", shopDomain)
+        }
+
+        // Get customer info for tracking
+        const shopifyCustomerId = (window as any).Shopify?.customer?.id
+        if (shopifyCustomerId) {
+          formData.append("shopifyCustomerId", shopifyCustomerId.toString())
+          headers["x-shopify-customer-id"] = shopifyCustomerId.toString()
+        }
+
+        const customerEmail = (window as any).Shopify?.customer?.email
+        if (customerEmail) {
+          formData.append("customerEmail", customerEmail)
+        }
+      }
+
+      logger.info("Sending try-on request", {
+        productId: currentProduct.id,
+        productName: currentProduct.name,
+        hasFullBody: !!images.fullBodyUrl,
+        hasHalfBody: !!images.halfBodyUrl,
+      })
+
       const response = await fetch("/api/try-on", {
         method: "POST",
+        headers,
         body: formData,
+        credentials: "include", // Include cookies for user ID
       })
 
       if (!response.ok) {
@@ -423,6 +513,11 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       const result: TryOnResult = await response.json()
       setGeneratingProductId(null)
       
+      logger.info("Try-on generation successful", {
+        productId: currentProduct.id,
+        imageUrl: result.imageUrl,
+      })
+      
       // Show success message with image in chat
       setMessages((prev) => [
         ...prev,
@@ -434,8 +529,23 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
         },
       ])
     } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "Failed to generate try-on")
+      const errorMessage = err instanceof Error ? err.message : "Failed to generate try-on"
+      logger.error("Try-on generation failed", {
+        productId: currentProduct.id,
+        error: errorMessage,
+      })
+      
+      setUploadError(errorMessage)
       setGeneratingProductId(null)
+      
+      // Show error message in chat
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: `Sorry, I encountered an error while generating your try-on: ${errorMessage}. Please try again.`,
+        },
+      ])
     } finally {
       setIsGenerating(false)
     }
@@ -483,10 +593,15 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
     const hasSavedImages = userImages.fullBodyUrl || userImages.halfBodyUrl
 
     if (hasSavedImages) {
+      logger.info("Try-on clicked with existing images", {
+        hasFullBody: !!userImages.fullBodyUrl,
+        hasHalfBody: !!userImages.halfBodyUrl,
+      })
       // Use saved images directly for try-on generation
       // handleTryOnWithUrls already handles isGenerating state
       await handleTryOnWithUrls(userImages)
     } else {
+      logger.info("Try-on clicked without images, opening upload dialog")
       // No images saved yet, open upload dialog
       setIsUploadDialogOpen(true)
     }
@@ -520,8 +635,6 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       return
     }
 
-    setIsUploadDialogOpen(false)
-    setIsGenerating(true)
     setUploadError(null)
 
     try {
@@ -534,10 +647,21 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
         uploadFormData.append("halfBodyPhoto", halfBodyPhoto)
       }
 
+      // Get request headers including Shopify customer ID if available
+      const uploadHeaders: HeadersInit = {}
+      if (typeof window !== "undefined") {
+        const shopifyCustomerId = (window as any).Shopify?.customer?.id
+        if (shopifyCustomerId) {
+          uploadHeaders["x-shopify-customer-id"] = shopifyCustomerId.toString()
+        }
+      }
+
       logger.info("Uploading user images to secure storage")
       const uploadResponse = await fetch("/api/upload-user-images", {
         method: "POST",
+        headers: uploadHeaders,
         body: uploadFormData,
+        credentials: "include", // Include cookies for user ID
       })
 
       if (!uploadResponse.ok) {
@@ -549,7 +673,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       logger.info("User images uploaded successfully", { userId: uploadResult.userId })
 
       // Store uploaded image URLs in context for future use
-      const newUserImages: any = {}
+      const newUserImages: { fullBodyUrl?: string; halfBodyUrl?: string } = {}
       if (uploadResult.images) {
         uploadResult.images.forEach((img: any) => {
           if (img.type === "fullBody") {
@@ -559,7 +683,26 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
           }
         })
       }
-      setUserImages(newUserImages)
+      
+      // Update context state with new images
+      setUserImages({
+        fullBodyUrl: newUserImages.fullBodyUrl || userImages.fullBodyUrl,
+        halfBodyUrl: newUserImages.halfBodyUrl || userImages.halfBodyUrl,
+      })
+      
+      logger.info("User images saved to context", {
+        hasFullBody: !!newUserImages.fullBodyUrl,
+        hasHalfBody: !!newUserImages.halfBodyUrl,
+      })
+
+      // Close upload dialog
+      setIsUploadDialogOpen(false)
+      
+      // Reset upload dialog state
+      setFullBodyPhoto(null)
+      setHalfBodyPhoto(null)
+      setFullBodyPreview(null)
+      setHalfBodyPreview(null)
 
       // Show success message
       setMessages((prev) => [
@@ -571,13 +714,6 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       ])
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Failed to save images")
-    } finally {
-      setIsGenerating(false)
-      // Reset upload dialog state
-      setFullBodyPhoto(null)
-      setHalfBodyPhoto(null)
-      setFullBodyPreview(null)
-      setHalfBodyPreview(null)
     }
   }
 
