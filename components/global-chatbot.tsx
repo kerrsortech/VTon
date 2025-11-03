@@ -8,7 +8,6 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { MessageCircle, X, Send, Loader2, Upload, UploadCloud, Image as ImageIcon, Download, Lock, Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { Product, TryOnResult } from "@/lib/closelook-types"
-import { Link } from "next/link"
 import { useCloselook } from "@/components/closelook-provider"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
@@ -19,6 +18,9 @@ const logger = {
   error: (...args: any[]) => console.error("[ERROR]", ...args),
   debug: (...args: any[]) => console.log("[DEBUG]", ...args),
 }
+
+// Import Link - webpack will alias to mock in widget context, works with Next.js in normal context
+import { Link as NextLink } from "next/link"
 
 interface Message {
   role: "user" | "assistant"
@@ -33,6 +35,8 @@ interface ProductRecommendation {
   name: string
   price: number
   reason: string
+  imageUrl?: string // Added for widget - backend provides full details
+  url?: string // Product URL for widget context
 }
 
 interface GlobalChatbotProps {
@@ -47,7 +51,8 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
-  const [products, setProducts] = useState<Product[]>([])
+  // Products are now fetched by backend - no local state needed
+  // Recommendations come from chat API with full product details
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -126,23 +131,10 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // Only run on mount
 
-  // Fetch products only when chatbot is opened for the first time
-  useEffect(() => {
-    if (!hasClickedOnce) return // Only fetch when user interacts
-    
-    async function fetchProducts() {
-      try {
-        const response = await fetch("/api/products")
-        if (response.ok) {
-          const data = await response.json()
-          setProducts(data.products || [])
-        }
-      } catch (error) {
-        console.error("Failed to fetch products:", error)
-      }
-    }
-    fetchProducts()
-  }, [hasClickedOnce])
+  // NOTE: Products are now fetched by the backend (chat API) when shop domain is provided
+  // Widget should only send shop domain and product ID, backend handles all product fetching
+  // This keeps the widget lightweight - only UI and basic tracking
+  // Products will be available in recommendations from chat API responses
 
   useEffect(() => {
     // Initialize with greeting message
@@ -341,27 +333,18 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
           shop: shopDomain, // Shopify shop domain
           customerName: customerName, // Customer name for personalization only
           customerInternal: customerInternal, // Internal customer info for API calls (not used by chatbot)
+          // Widget sends minimal data - only product ID/handle and shop domain
+          // Backend fetches full product data from Shopify
           currentProduct: currentProduct
             ? {
                 id: currentProduct.id,
+                // Only send basic identifying info, backend will fetch full details
                 name: currentProduct.name,
-                category: currentProduct.category,
-                type: currentProduct.type,
-                color: currentProduct.color,
-                price: currentProduct.price,
-                description: currentProduct.description,
-                sizes: currentProduct.sizes,
               }
             : undefined,
-          allProducts: products.map((p) => ({
-            id: p.id,
-            name: p.name,
-            category: p.category,
-            type: p.type,
-            color: p.color,
-            price: p.price,
-            sizes: p.sizes,
-          })),
+          // No longer sending allProducts - backend will fetch from Shopify
+          // This keeps widget lightweight (UI + basic tracking only)
+          allProducts: undefined,
         }),
       })
 
@@ -974,30 +957,32 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
                       {message.recommendations && message.recommendations.length > 0 && (
                         <div className="mt-3 space-y-2">
                           {message.recommendations.map((rec, recIndex) => {
-                            const product = products.find((p) => p.id === rec.id)
-                            if (!product) return null
-
+                            // Recommendations now come from backend with full product details
+                            // No need to lookup in products array - widget is lightweight
+                            const productUrl = rec.url || `/product/${rec.id}`
+                            const productImage = rec.imageUrl || "/placeholder.svg"
+                            
                             return (
-                              <Link
+                              <NextLink
                                 key={recIndex}
-                                href={`/product/${product.id}`}
+                                href={productUrl}
                                 className="block"
                               >
                                 <div className="p-3 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-all cursor-pointer">
                                   <div className="flex gap-3">
                                     <div className="w-14 h-14 rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-700 flex-shrink-0 border border-white/40">
                                       <img
-                                        src={product.images[0] || "/placeholder.svg"}
-                                        alt={product.name}
+                                        src={productImage}
+                                        alt={rec.name}
                                         className="w-full h-full object-cover"
                                       />
                                     </div>
                                     <div className="flex-1 min-w-0">
                                       <p className="font-medium text-xs truncate text-gray-900 dark:text-gray-100">
-                                        {product.name}
+                                        {rec.name}
                                       </p>
                                       <p className="text-xs font-semibold text-gray-700 dark:text-gray-300 mt-0.5">
-                                        ${product.price}
+                                        ${rec.price}
                                       </p>
                                       <p className="text-xs text-gray-600 dark:text-gray-400 mt-1 line-clamp-2">
                                         {rec.reason}
@@ -1005,7 +990,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
                                     </div>
                                   </div>
                                 </div>
-                              </Link>
+                              </NextLink>
                             )
                           })}
                         </div>

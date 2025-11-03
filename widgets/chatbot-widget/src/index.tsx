@@ -7,7 +7,6 @@ import React from "react"
 import { createRoot } from "react-dom/client"
 import { GlobalChatbot } from "../../../components/global-chatbot"
 import type { Product } from "../../../lib/closelook-types"
-import { mapToCloselookProduct } from "./shopify-integration"
 import "./styles.css"
 
 interface WidgetConfig {
@@ -32,9 +31,16 @@ export function init(config: WidgetConfig) {
 
   const { container, product, shopDomain, apiUrl } = config
 
-  // Map Shopify product to Closelook format (if available)
+  // Widget only tracks minimal data - product ID/handle and shop domain
+  // All product mapping and fetching happens in the backend (Render server)
+  // This keeps the widget lightweight (UI + basic tracking only)
   const closelookProduct: Product | undefined = product
-    ? mapToCloselookProduct(product, shopDomain)
+    ? {
+        id: product.id || product.handle || "",
+        name: product.title || product.name || "",
+        // Backend will fetch full product details from Shopify
+        // Widget only sends ID and name for context
+      }
     : undefined
 
   // Override fetch to use the provided API URL

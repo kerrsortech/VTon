@@ -21,6 +21,8 @@ import { createCustomerNote } from "@/lib/shopify/ticket-system"
 import { extractTicketRequest } from "@/lib/ticket-extractor"
 import { validateChatInput } from "@/lib/production-validation"
 import { addCorsHeaders, createCorsPreflightResponse, isAllowedOrigin } from "@/lib/cors-headers"
+import { ShopifyProductAdapter } from "@/lib/closelook-plugin/adapters/shopify-adapter"
+import type { CloselookProduct } from "@/lib/closelook-plugin/types"
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "")
 
@@ -178,17 +180,97 @@ export async function POST(request: NextRequest) {
     const shouldFetchOrders = queryType.isOrder || queryType.isAccount
     const shouldFetchPolicies = queryType.isPolicy
 
+    // BACKEND LOGIC: Fetch products and current product from Shopify if shop domain is provided
+    // Widget should only send shop domain and product ID, backend handles all fetching and mapping
+    let fetchedProducts: Product[] = []
+    let fetchedCurrentProduct: Product | undefined = currentProduct
+    
+    if (shop) {
+      try {
+        // Get Shopify session to access Storefront API
+        const session = await getSession(shop)
+        
+        // Check if we have storefront token in environment (for widget context)
+        // Or use session's storefront token if available
+        const storefrontToken = process.env.SHOPIFY_STOREFRONT_TOKEN || session?.storefrontToken
+        
+        if (storefrontToken) {
+          const adapter = new ShopifyProductAdapter(shop, storefrontToken)
+          
+          // Fetch current product details if product ID is provided (widget sends minimal data)
+          if (currentProduct && currentProduct.id && !currentProduct.category) {
+            try {
+              // Widget only sends ID, backend fetches full details
+              const closelookProduct = await adapter.getProduct(currentProduct.id)
+              if (closelookProduct) {
+                fetchedCurrentProduct = {
+                  id: closelookProduct.id,
+                  name: closelookProduct.name,
+                  category: closelookProduct.category,
+                  type: closelookProduct.type,
+                  color: closelookProduct.color,
+                  price: closelookProduct.price,
+                  images: closelookProduct.images,
+                  description: closelookProduct.description,
+                  sizes: closelookProduct.sizes,
+                }
+                logger.info(`Fetched current product details from Shopify: ${currentProduct.id}`)
+              }
+            } catch (productError) {
+              logger.warn("Error fetching current product from Shopify", { 
+                error: productError instanceof Error ? productError.message : String(productError),
+                productId: currentProduct.id 
+              })
+              // Keep the minimal product data from widget
+            }
+          }
+          
+          // Fetch all products from Shopify Storefront API using adapter
+          const closelookProducts: CloselookProduct[] = await adapter.getAllProducts()
+          
+          // Convert CloselookProduct to Product format
+          fetchedProducts = closelookProducts.map((cp: CloselookProduct) => ({
+            id: cp.id,
+            name: cp.name,
+            category: cp.category,
+            type: cp.type,
+            color: cp.color,
+            price: cp.price,
+            images: cp.images,
+            description: cp.description,
+            sizes: cp.sizes,
+          }))
+          
+          logger.info(`Fetched ${fetchedProducts.length} products from Shopify for shop ${shop}`)
+        } else {
+          logger.warn(`No storefront token available for shop ${shop}, using products from request if provided`)
+        }
+      } catch (error) {
+        logger.error("Error fetching products from Shopify", { 
+          error: error instanceof Error ? error.message : String(error),
+          shop 
+        })
+        // Fallback to products from request if available
+      }
+    }
+    
+    // Use fetched current product or fallback to provided one
+    currentProduct = fetchedCurrentProduct || currentProduct
+    
+    // Use fetched products from backend, fallback to products from request (for demo/Next.js app)
+    const allProductsToUse = fetchedProducts.length > 0 ? fetchedProducts : (allProducts || [])
+    
     // SCALABILITY: Use semantic search to retrieve only relevant products
     // This prevents sending entire catalog (e.g., 1000 products) to LLM
     let relevantProducts: Product[] = []
     let queryIntent: QueryIntent | null = null
     let recommendations: any[] = []
 
-    const catalogSize = allProducts?.length || 0
+    const catalogSize = allProductsToUse.length
     const isLargeCatalog = catalogSize > 50
 
     // For large catalogs, use intelligent product retrieval
-    if (isLargeCatalog && allProducts && allProducts.length > 0) {
+    if (isLargeCatalog && allProductsToUse.length > 0) {
       try {
         const apiKey = process.env.GOOGLE_GEMINI_API_KEY || ""
         
@@ -205,7 +287,7 @@ export async function POST(request: NextRequest) {
           ? getProductLimitForQuery(queryIntent, catalogSize)
           : 20 // Default limit
 
-        relevantProducts = await retrieveRelevantProducts(allProducts as Product[], message, {
+        relevantProducts = await retrieveRelevantProducts(allProductsToUse as Product[], message, {
           maxProducts: productLimit,
           useGeminiIntent: !!apiKey,
           apiKey: apiKey,
@@ -220,29 +302,33 @@ export async function POST(request: NextRequest) {
             name: product.name,
             price: product.price,
             reason: `Matches your query criteria`,
+            imageUrl: product.images?.[0] || undefined,
+            url: shop ? `https://${shop.replace(/\.myshopify\.com$/, '')}.myshopify.com/products/${product.id}` : `/product/${product.id}`,
           }))
         }
       } catch (error) {
         logger.warn("Error in semantic search, falling back to simple filter", { error: error instanceof Error ? error.message : String(error) })
         // Fallback to simple filter
-        relevantProducts = smartFilterProducts(allProducts as Product[], message).slice(0, 20)
+        relevantProducts = smartFilterProducts(allProductsToUse as Product[], message).slice(0, 20)
       }
-    } else if (allProducts && allProducts.length > 0) {
+    } else if (allProductsToUse.length > 0) {
       // For small catalogs, use simple filtering
       const isSearchQuery = isProductSearchQuery(message)
       if (isSearchQuery) {
-        relevantProducts = smartFilterProducts(allProducts as Product[], message)
+        relevantProducts = smartFilterProducts(allProductsToUse as Product[], message)
         if (relevantProducts.length > 0) {
           recommendations = relevantProducts.slice(0, 10).map((product) => ({
             id: product.id,
             name: product.name,
             price: product.price,
             reason: `Matches your search criteria`,
+            imageUrl: product.images?.[0] || undefined,
+            url: shop ? `https://${shop.replace(/\.myshopify\.com$/, '')}.myshopify.com/products/${product.id}` : `/product/${product.id}`,
           }))
         }
       } else {
         // For small catalogs and non-search queries, use all products
-        relevantProducts = allProducts as Product[]
+        relevantProducts = allProductsToUse as Product[]
       }
     }
 
@@ -592,8 +678,20 @@ export async function POST(request: NextRequest) {
     // This handles both PRODUCT_RECOMMENDATION JSON format and plain text mentions
     const { cleanedText, extractedProducts: llmRecommendations } = extractProductsFromResponse(
       text,
-      allProducts || [],
+      allProductsToUse || [],
     )
+    
+    // Enrich LLM recommendations with full product details (imageUrl, url) for widget
+    const enrichedLlmRecommendations = llmRecommendations.map((rec: any) => {
+      const fullProduct = allProductsToUse.find((p: Product) => p.id === rec.id)
+      return {
+        ...rec,
+        imageUrl: fullProduct?.images?.[0] || rec.imageUrl,
+        url: shop && fullProduct 
+          ? `https://${shop.replace(/\.myshopify\.com$/, '')}.myshopify.com/products/${rec.id}`
+          : rec.url || `/product/${rec.id}`,
+      }
+    })
 
     // Extract ticket creation request if user confirms ticket creation
     let ticketCreated = false
@@ -684,14 +782,14 @@ export async function POST(request: NextRequest) {
       finalRecommendations.push(...recommendations)
       
       // Add LLM recommendations that aren't already included
-      for (const llmRec of llmRecommendations) {
+      for (const llmRec of enrichedLlmRecommendations) {
         if (!finalRecommendations.some((r) => r.id === llmRec.id)) {
           finalRecommendations.push(llmRec)
         }
       }
     } else {
       // Use LLM recommendations if no semantic recommendations
-      finalRecommendations.push(...llmRecommendations)
+      finalRecommendations.push(...enrichedLlmRecommendations)
     }
 
     // Prepare response message

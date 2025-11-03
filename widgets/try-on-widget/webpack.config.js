@@ -16,6 +16,7 @@ module.exports = {
       // Mock Next.js modules for standalone environment
       'next/navigation': path.resolve(__dirname, '../shared/mocks/next-navigation.ts'),
       'next/link': path.resolve(__dirname, '../shared/mocks/next-link.tsx'),
+      'next/link.js': path.resolve(__dirname, '../shared/mocks/next-link.tsx'),
     },
   },
   module: {
