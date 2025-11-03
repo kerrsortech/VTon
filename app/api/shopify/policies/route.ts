@@ -87,3 +87,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
+export const config = {
+  maxDuration: 30,
+}
+

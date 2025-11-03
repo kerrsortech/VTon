@@ -420,17 +420,31 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
         formData.append("halfBodyUrl", images.halfBodyUrl)
       }
 
-      const maxProductImages = 3
-      const productImagesToSend = currentProduct.images.slice(0, maxProductImages)
+      // PRODUCTION: Only fetch product images client-side if not in Shopify context
+      // Backend will fetch images from Shopify Storefront API when shopDomain is provided
+      const shopDomain = (typeof window !== "undefined") 
+        ? ((window as any).Shopify?.shop || (window as any).shopDomain || null)
+        : null
+      
+      let productImageCount = 0
+      if (!shopDomain && currentProduct.images && currentProduct.images.length > 0) {
+        // Not in Shopify context, fetch images client-side as fallback
+        const maxProductImages = 3
+        const productImagesToSend = currentProduct.images.slice(0, maxProductImages)
 
-      for (let i = 0; i < productImagesToSend.length; i++) {
-        const productImageResponse = await fetch(productImagesToSend[i])
-        const productImageBlob = await productImageResponse.blob()
-        const productImageFile = new File([productImageBlob], `product-${i}.jpg`, { type: productImageBlob.type })
-        formData.append(`productImage${i}`, productImageFile)
+        for (let i = 0; i < productImagesToSend.length; i++) {
+          const productImageResponse = await fetch(productImagesToSend[i])
+          const productImageBlob = await productImageResponse.blob()
+          const productImageFile = new File([productImageBlob], `product-${i}.jpg`, { type: productImageBlob.type })
+          formData.append(`productImage${i}`, productImageFile)
+        }
+        productImageCount = productImagesToSend.length
+      } else if (shopDomain) {
+        // In Shopify context - backend will fetch images from Storefront API
+        logger.info("Shopify context detected, backend will fetch product images", { shopDomain })
       }
 
-      formData.append("productImageCount", String(productImagesToSend.length))
+      formData.append("productImageCount", String(productImageCount))
       formData.append("productName", currentProduct.name)
       formData.append("productCategory", currentProduct.category)
       formData.append("productType", currentProduct.type)
@@ -445,12 +459,9 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       // Include analytics tracking data
       formData.append("productId", currentProduct.id)
       
-      // Get shop domain from window (for Shopify stores)
+      // Get shop domain and customer info from window (for Shopify stores)
       const headers: HeadersInit = {}
       if (typeof window !== "undefined") {
-        const shopDomain = (window as any).Shopify?.shop || 
-                          (window as any).shopDomain ||
-                          null
         if (shopDomain) {
           formData.append("shopDomain", shopDomain)
         }

@@ -769,65 +769,8 @@
       const productUrl = state.currentProduct.url || window.location.href;
       formData.append('productUrl', productUrl);
 
-      // Fetch product images from Shopify (exact match of original implementation)
-      // Backend expects product images as File objects (fetched client-side)
-      const maxProductImages = 3;
-      const productImagesToSend = (state.currentProduct.images || []).slice(0, maxProductImages);
-
-      // If no images in product data, try to get from page
-      let productImageUrls = productImagesToSend;
-      if (productImageUrls.length === 0) {
-        const productImageEl = document.querySelector('.product-image img, .product__media img, [data-product-image] img, .product-gallery img');
-        if (productImageEl) {
-          let imageUrl = productImageEl.src;
-          // Remove size parameters for full resolution
-          imageUrl = imageUrl.replace(/[?&]_width=\d+/g, '').replace(/[?&]_height=\d+/g, '');
-          productImageUrls = [imageUrl];
-        } else if (state.currentProduct.imageUrl) {
-          productImageUrls = [state.currentProduct.imageUrl];
-        }
-      }
-
-      if (productImageUrls.length === 0) {
-        throw new Error('Could not find product images. Please ensure you are on a product page.');
-      }
-
-      // Fetch product images and convert to File objects (exact match of original)
-      console.log(`📥 Fetching ${productImageUrls.length} product images...`);
-      for (let i = 0; i < productImageUrls.length; i++) {
-        try {
-          const productImageResponse = await fetch(productImageUrls[i]);
-          if (!productImageResponse.ok) {
-            console.warn(`⚠️ Failed to fetch product image ${i + 1}:`, productImageResponse.status);
-            continue;
-          }
-          const productImageBlob = await productImageResponse.blob();
-          const productImageFile = new File([productImageBlob], `product-${i}.jpg`, { type: productImageBlob.type || 'image/jpeg' });
-          formData.append(`productImage${i}`, productImageFile);
-          console.log(`✅ Product image ${i + 1} fetched successfully`);
-        } catch (error) {
-          console.warn(`⚠️ Error fetching product image ${i + 1}:`, error);
-          // Continue with other images
-        }
-      }
-
-      formData.append('productImageCount', String(productImageUrls.length));
-      
-      // Always send product URL for backend page analysis (enhances metadata)
-      const currentPageUrl = window.location.href;
-      if (state.currentProduct.url || currentPageUrl) {
-        const productUrl = state.currentProduct.url || currentPageUrl;
-        formData.append('productUrl', productUrl);
-        console.log('✅ Product URL sent for page analysis:', productUrl);
-      }
-
-      // Backend will:
-      // 1. Use product images (as File objects) for try-on generation
-      // 2. Analyze product URL for enhanced metadata (if provided)
-      // 3. Use Replicate API (Seedream-4) to generate try-on image
-      // 4. Return result image URL
-
-      // Get Shopify context
+      // PRODUCTION: Only fetch product images client-side if not in Shopify context
+      // Backend will fetch images from Shopify Storefront API when shopDomain is provided
       let shopDomain = undefined;
       if (window.Shopify?.shop) {
         shopDomain = window.Shopify.shop;
@@ -840,6 +783,65 @@
         }
       }
 
+      let productImageCount = 0;
+      if (!shopDomain && state.currentProduct.images && state.currentProduct.images.length > 0) {
+        // Not in Shopify context, fetch images client-side as fallback
+        const maxProductImages = 3;
+        const productImagesToSend = state.currentProduct.images.slice(0, maxProductImages);
+
+        // If no images in product data, try to get from page
+        let productImageUrls = productImagesToSend;
+        if (productImageUrls.length === 0) {
+          const productImageEl = document.querySelector('.product-image img, .product__media img, [data-product-image] img, .product-gallery img');
+          if (productImageEl) {
+            let imageUrl = productImageEl.src;
+            // Remove size parameters for full resolution
+            imageUrl = imageUrl.replace(/[?&]_width=\d+/g, '').replace(/[?&]_height=\d+/g, '');
+            productImageUrls = [imageUrl];
+          } else if (state.currentProduct.imageUrl) {
+            productImageUrls = [state.currentProduct.imageUrl];
+          }
+        }
+
+        if (productImageUrls.length === 0) {
+          throw new Error('Could not find product images. Please ensure you are on a product page.');
+        }
+
+        // Fetch product images and convert to File objects
+        console.log(`📥 Fetching ${productImageUrls.length} product images client-side (non-Shopify context)...`);
+        for (let i = 0; i < productImageUrls.length; i++) {
+          try {
+            const productImageResponse = await fetch(productImageUrls[i]);
+            if (!productImageResponse.ok) {
+              console.warn(`⚠️ Failed to fetch product image ${i + 1}:`, productImageResponse.status);
+              continue;
+            }
+            const productImageBlob = await productImageResponse.blob();
+            const productImageFile = new File([productImageBlob], `product-${i}.jpg`, { type: productImageBlob.type || 'image/jpeg' });
+            formData.append(`productImage${i}`, productImageFile);
+            console.log(`✅ Product image ${i + 1} fetched successfully`);
+          } catch (error) {
+            console.warn(`⚠️ Error fetching product image ${i + 1}:`, error);
+            // Continue with other images
+          }
+        }
+        productImageCount = productImageUrls.length;
+      } else if (shopDomain) {
+        // In Shopify context - backend will fetch images from Storefront API
+        console.log('✅ Shopify context detected, backend will fetch product images from Storefront API', shopDomain);
+      }
+
+      formData.append('productImageCount', String(productImageCount));
+      
+      // Always send product URL for backend page analysis (enhances metadata)
+      const currentPageUrl = window.location.href;
+      if (state.currentProduct.url || currentPageUrl) {
+        const productUrl = state.currentProduct.url || currentPageUrl;
+        formData.append('productUrl', productUrl);
+        console.log('✅ Product URL sent for page analysis:', productUrl);
+      }
+
+      // Get Shopify context and customer info
       if (shopDomain) {
         formData.append('shopDomain', shopDomain);
         
@@ -851,6 +853,13 @@
           formData.append('customerEmail', window.Shopify.customer.email);
         }
       }
+
+      // Backend will:
+      // 1. Fetch product images from Shopify Storefront API (if shopDomain provided)
+      // 2. Use product images (as File objects) for try-on generation
+      // 3. Analyze product URL for enhanced metadata (if provided)
+      // 4. Use Replicate API (Seedream-4) to generate try-on image
+      // 5. Return result image URL
 
       const response = await fetch(backendUrl, {
         method: 'POST',

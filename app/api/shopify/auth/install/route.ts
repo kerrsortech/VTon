@@ -121,3 +121,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
+export const config = {
+  maxDuration: 30,
+}
+

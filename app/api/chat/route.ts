@@ -825,3 +825,7 @@ export async function POST(request: NextRequest) {
     return addCorsHeaders(response, request)
   }
 }
+
+export const config = {
+  maxDuration: 60,
+}

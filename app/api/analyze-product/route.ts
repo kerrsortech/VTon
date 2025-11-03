@@ -321,3 +321,7 @@ REMEMBER: Analyze USER PHOTO (first image) for userCharacteristics, and PRODUCT 
     return NextResponse.json(sanitizedError, { status: statusCode })
   }
 }
+
+export const config = {
+  maxDuration: 60,
+}

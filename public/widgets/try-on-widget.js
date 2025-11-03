@@ -18488,36 +18488,37 @@ function CloselookProvider({ children, config = {} }) {
     const [userImages, setUserImages] = (0,node_modules_react.useState)({});
     const [isEnabled, setIsEnabled] = (0,node_modules_react.useState)(true);
     const [generatingProductId, setGeneratingProductId] = (0,node_modules_react.useState)(null);
-    const addTryOnResult = (productId, result) => {
+    const addTryOnResult = (0,node_modules_react.useCallback)((productId, result) => {
         setTryOnResults((prev) => new Map(prev).set(productId, result));
-    };
-    const getTryOnResult = (productId) => {
+    }, []);
+    const getTryOnResult = (0,node_modules_react.useCallback)((productId) => {
         return tryOnResults.get(productId);
-    };
-    const clearTryOnResult = (productId) => {
+    }, [tryOnResults]);
+    const clearTryOnResult = (0,node_modules_react.useCallback)((productId) => {
         setTryOnResults((prev) => {
             const next = new Map(prev);
             next.delete(productId);
             return next;
         });
-    };
-    const clearAllResults = () => {
+    }, []);
+    const clearAllResults = (0,node_modules_react.useCallback)(() => {
         setTryOnResults(new Map());
-    };
-    return (node_modules_react.createElement(CloselookContext.Provider, { value: {
-            tryOnResults,
-            addTryOnResult,
-            getTryOnResult,
-            clearTryOnResult,
-            clearAllResults,
-            userImages,
-            setUserImages,
-            config,
-            isEnabled,
-            setIsEnabled,
-            generatingProductId,
-            setGeneratingProductId,
-        } }, children));
+    }, []);
+    const contextValue = (0,node_modules_react.useMemo)(() => ({
+        tryOnResults,
+        addTryOnResult,
+        getTryOnResult,
+        clearTryOnResult,
+        clearAllResults,
+        userImages,
+        setUserImages,
+        config,
+        isEnabled,
+        setIsEnabled,
+        generatingProductId,
+        setGeneratingProductId,
+    }), [tryOnResults, addTryOnResult, getTryOnResult, clearTryOnResult, clearAllResults, userImages, config, isEnabled, generatingProductId]);
+    return (node_modules_react.createElement(CloselookContext.Provider, { value: contextValue }, children));
 }
 function useCloselook() {
     const context = (0,node_modules_react.useContext)(CloselookContext);

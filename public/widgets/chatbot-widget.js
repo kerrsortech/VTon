@@ -17891,6 +17891,37 @@ if (true) {
 
 /***/ }),
 
+/***/ 861:
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   Link: () => (/* binding */ Link),
+/* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
+/* harmony export */ });
+/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(349);
+/**
+ * Mock Next.js Link component for standalone widget environment
+ */
+
+function Link({ href, children, className, onClick }) {
+    const handleClick = (e) => {
+        e.preventDefault();
+        if (onClick) {
+            onClick();
+        }
+        else if (typeof window !== "undefined") {
+            window.location.href = href;
+        }
+    };
+    return (react__WEBPACK_IMPORTED_MODULE_0__.createElement("a", { href: href, className: className, onClick: handleClick }, children));
+}
+// Also export as default for compatibility
+/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (Link);
+
+
+/***/ }),
+
 /***/ 865:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -18836,10 +18867,6 @@ __webpack_require__.r(__webpack_exports__);
 __webpack_require__.d(__webpack_exports__, {
   init: () => (/* binding */ init)
 });
-
-// NAMESPACE OBJECT: ../shared/mocks/next-link.tsx
-var next_link_namespaceObject = {};
-__webpack_require__.r(next_link_namespaceObject);
 
 // EXTERNAL MODULE: ./node_modules/react/index.js
 var react = __webpack_require__(540);
@@ -22955,24 +22982,6 @@ const Lock = createLucideIcon("Lock", [
 
 //# sourceMappingURL=lock.js.map
 
-;// ../shared/mocks/next-link.tsx
-/**
- * Mock Next.js Link component for standalone widget environment
- */
-
-function Link({ href, children, className, onClick }) {
-    const handleClick = (e) => {
-        e.preventDefault();
-        if (onClick) {
-            onClick();
-        }
-        else if (typeof window !== "undefined") {
-            window.location.href = href;
-        }
-    };
-    return (React.createElement("a", { href: href, className: className, onClick: handleClick }, children));
-}
-
 ;// ../../components/closelook-provider.tsx
 "use client";
 
@@ -22982,36 +22991,37 @@ function CloselookProvider({ children, config = {} }) {
     const [userImages, setUserImages] = useState({});
     const [isEnabled, setIsEnabled] = useState(true);
     const [generatingProductId, setGeneratingProductId] = useState(null);
-    const addTryOnResult = (productId, result) => {
+    const addTryOnResult = useCallback((productId, result) => {
         setTryOnResults((prev) => new Map(prev).set(productId, result));
-    };
-    const getTryOnResult = (productId) => {
+    }, []);
+    const getTryOnResult = useCallback((productId) => {
         return tryOnResults.get(productId);
-    };
-    const clearTryOnResult = (productId) => {
+    }, [tryOnResults]);
+    const clearTryOnResult = useCallback((productId) => {
         setTryOnResults((prev) => {
             const next = new Map(prev);
             next.delete(productId);
             return next;
         });
-    };
-    const clearAllResults = () => {
+    }, []);
+    const clearAllResults = useCallback(() => {
         setTryOnResults(new Map());
-    };
-    return (React.createElement(CloselookContext.Provider, { value: {
-            tryOnResults,
-            addTryOnResult,
-            getTryOnResult,
-            clearTryOnResult,
-            clearAllResults,
-            userImages,
-            setUserImages,
-            config,
-            isEnabled,
-            setIsEnabled,
-            generatingProductId,
-            setGeneratingProductId,
-        } }, children));
+    }, []);
+    const contextValue = useMemo(() => ({
+        tryOnResults,
+        addTryOnResult,
+        getTryOnResult,
+        clearTryOnResult,
+        clearAllResults,
+        userImages,
+        setUserImages,
+        config,
+        isEnabled,
+        setIsEnabled,
+        generatingProductId,
+        setGeneratingProductId,
+    }), [tryOnResults, addTryOnResult, getTryOnResult, clearTryOnResult, clearAllResults, userImages, config, isEnabled, generatingProductId]);
+    return (React.createElement(CloselookContext.Provider, { value: contextValue }, children));
 }
 function useCloselook() {
     const context = (0,node_modules_react.useContext)(CloselookContext);
@@ -25307,9 +25317,23 @@ function dialog_DialogDescription({ className, ...props }) {
 }
 
 
+;// ../../components/link-wrapper.tsx
+/**
+ * Link wrapper component that works in both Next.js and widget contexts
+ * Webpack will alias next/link to mock in widget context
+ */
+// Use require pattern so webpack can alias next/link to mock
+// Webpack resolves 'next/link' to the mock file in widget context
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const NextLinkModule = __webpack_require__(861);
+// Extract Link component from module (handles both named and default exports)
+// In Next.js context: NextLinkModule.Link is the real Next.js Link
+// In widget context: NextLinkModule.Link is the mock Link from webpack alias
+const LinkComponent = NextLinkModule.Link || NextLinkModule.default || NextLinkModule;
+const Link = LinkComponent;
+
 ;// ../../components/global-chatbot.tsx
 "use client";
-
 
 
 
@@ -25322,7 +25346,10 @@ const logger = {
     info: (...args) => console.log("[INFO]", ...args),
     warn: (...args) => console.warn("[WARN]", ...args),
     error: (...args) => console.error("[ERROR]", ...args),
+    debug: (...args) => console.log("[DEBUG]", ...args),
 };
+// Import Link wrapper that works in both Next.js and widget contexts
+
 function GlobalChatbot({ currentProduct, className }) {
     const pathname = usePathname();
     const [isOpen, setIsOpen] = (0,node_modules_react.useState)(false);
@@ -25330,7 +25357,8 @@ function GlobalChatbot({ currentProduct, className }) {
     const [messages, setMessages] = (0,node_modules_react.useState)([]);
     const [input, setInput] = (0,node_modules_react.useState)("");
     const [isLoading, setIsLoading] = (0,node_modules_react.useState)(false);
-    const [products, setProducts] = (0,node_modules_react.useState)([]);
+    // Products are now fetched by backend - no local state needed
+    // Recommendations come from chat API with full product details
     const scrollRef = (0,node_modules_react.useRef)(null);
     const scrollAreaRef = (0,node_modules_react.useRef)(null);
     const inputRef = (0,node_modules_react.useRef)(null);
@@ -25350,22 +25378,59 @@ function GlobalChatbot({ currentProduct, className }) {
     // Full-screen image viewer state
     const [fullScreenImage, setFullScreenImage] = (0,node_modules_react.useState)(null);
     const { setGeneratingProductId, userImages, setUserImages } = useCloselook();
-    // Fetch products using the plugin adapter via API
+    // Check if user has uploaded images
+    const hasUploadedImages = userImages.fullBodyUrl || userImages.halfBodyUrl;
+    // Fetch existing user images on mount
     (0,node_modules_react.useEffect)(() => {
-        async function fetchProducts() {
+        // Skip if images are already loaded
+        if (hasUploadedImages) {
+            return;
+        }
+        const fetchUserImages = async () => {
             try {
-                const response = await fetch("/api/products");
+                // Get Shopify customer ID from window if available (for Shopify stores)
+                const shopifyCustomerId = typeof window !== "undefined"
+                    ? window.Shopify?.customer?.id
+                    : null;
+                const headers = {};
+                if (shopifyCustomerId) {
+                    headers["x-shopify-customer-id"] = shopifyCustomerId.toString();
+                }
+                const response = await fetch("/api/user-images", {
+                    method: "GET",
+                    headers,
+                    credentials: "include", // Include cookies for anonymous user ID
+                });
                 if (response.ok) {
-                    const data = await response.json();
-                    setProducts(data.products || []);
+                    const result = await response.json();
+                    if (result.images && (result.images.fullBodyUrl || result.images.halfBodyUrl)) {
+                        setUserImages({
+                            fullBodyUrl: result.images.fullBodyUrl,
+                            halfBodyUrl: result.images.halfBodyUrl,
+                        });
+                        logger.info("User images loaded from server", {
+                            hasFullBody: !!result.images.fullBodyUrl,
+                            hasHalfBody: !!result.images.halfBodyUrl,
+                        });
+                    }
+                }
+                else if (response.status !== 400) {
+                    // Log non-client errors (400 means no user ID, which is expected for new users)
+                    logger.warn("Failed to fetch user images:", response.status);
                 }
             }
             catch (error) {
-                console.error("Failed to fetch products:", error);
+                // Silently fail - user images might not exist yet
+                logger.debug("Could not fetch user images:", error);
             }
-        }
-        fetchProducts();
-    }, []);
+        };
+        fetchUserImages();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []); // Only run on mount
+    // NOTE: Products are now fetched by the backend (chat API) when shop domain is provided
+    // Widget should only send shop domain and product ID, backend handles all product fetching
+    // This keeps the widget lightweight - only UI and basic tracking
+    // Products will be available in recommendations from chat API responses
     (0,node_modules_react.useEffect)(() => {
         // Initialize with greeting message
         setMessages([{ role: "assistant", content: "How may I help you?" }]);
@@ -25512,7 +25577,7 @@ function GlobalChatbot({ currentProduct, className }) {
                 }
                 // Detect customer from Shopify storefront context (only name for personalization)
                 try {
-                    const customerDetector = await __webpack_require__.e(/* import() */ 950).then(__webpack_require__.bind(__webpack_require__, 950));
+                    const customerDetector = await __webpack_require__.e(/* import() */ 691).then(__webpack_require__.bind(__webpack_require__, 691));
                     const detected = customerDetector.detectShopifyCustomer();
                     if (detected.isLoggedIn) {
                         customerName = detected.name;
@@ -25538,27 +25603,18 @@ function GlobalChatbot({ currentProduct, className }) {
                     shop: shopDomain, // Shopify shop domain
                     customerName: customerName, // Customer name for personalization only
                     customerInternal: customerInternal, // Internal customer info for API calls (not used by chatbot)
+                    // Widget sends minimal data - only product ID/handle and shop domain
+                    // Backend fetches full product data from Shopify
                     currentProduct: currentProduct
                         ? {
                             id: currentProduct.id,
+                            // Only send basic identifying info, backend will fetch full details
                             name: currentProduct.name,
-                            category: currentProduct.category,
-                            type: currentProduct.type,
-                            color: currentProduct.color,
-                            price: currentProduct.price,
-                            description: currentProduct.description,
-                            sizes: currentProduct.sizes,
                         }
                         : undefined,
-                    allProducts: products.map((p) => ({
-                        id: p.id,
-                        name: p.name,
-                        category: p.category,
-                        type: p.type,
-                        color: p.color,
-                        price: p.price,
-                        sizes: p.sizes,
-                    })),
+                    // No longer sending allProducts - backend will fetch from Shopify
+                    // This keeps widget lightweight (UI + basic tracking only)
+                    allProducts: undefined,
                 }),
             });
             if (!response.ok) {
@@ -25624,26 +25680,68 @@ function GlobalChatbot({ currentProduct, className }) {
             if (images.halfBodyUrl) {
                 formData.append("halfBodyUrl", images.halfBodyUrl);
             }
-            const maxProductImages = 3;
-            const productImagesToSend = currentProduct.images.slice(0, maxProductImages);
-            for (let i = 0; i < productImagesToSend.length; i++) {
-                const productImageResponse = await fetch(productImagesToSend[i]);
-                const productImageBlob = await productImageResponse.blob();
-                const productImageFile = new File([productImageBlob], `product-${i}.jpg`, { type: productImageBlob.type });
-                formData.append(`productImage${i}`, productImageFile);
+            // PRODUCTION: Only fetch product images client-side if not in Shopify context
+            // Backend will fetch images from Shopify Storefront API when shopDomain is provided
+            const shopDomain = (typeof window !== "undefined")
+                ? (window.Shopify?.shop || window.shopDomain || null)
+                : null;
+            let productImageCount = 0;
+            if (!shopDomain && currentProduct.images && currentProduct.images.length > 0) {
+                // Not in Shopify context, fetch images client-side as fallback
+                const maxProductImages = 3;
+                const productImagesToSend = currentProduct.images.slice(0, maxProductImages);
+                for (let i = 0; i < productImagesToSend.length; i++) {
+                    const productImageResponse = await fetch(productImagesToSend[i]);
+                    const productImageBlob = await productImageResponse.blob();
+                    const productImageFile = new File([productImageBlob], `product-${i}.jpg`, { type: productImageBlob.type });
+                    formData.append(`productImage${i}`, productImageFile);
+                }
+                productImageCount = productImagesToSend.length;
             }
-            formData.append("productImageCount", String(productImagesToSend.length));
+            else if (shopDomain) {
+                // In Shopify context - backend will fetch images from Storefront API
+                logger.info("Shopify context detected, backend will fetch product images", { shopDomain });
+            }
+            formData.append("productImageCount", String(productImageCount));
             formData.append("productName", currentProduct.name);
             formData.append("productCategory", currentProduct.category);
             formData.append("productType", currentProduct.type);
             formData.append("productColor", currentProduct.color);
+            // Send product page URL if available (for enhanced product analysis)
             if (currentProduct.url || (typeof window !== "undefined" && window.location.href)) {
                 const productUrl = currentProduct.url || window.location.href;
                 formData.append("productUrl", productUrl);
             }
+            // Include analytics tracking data
+            formData.append("productId", currentProduct.id);
+            // Get shop domain and customer info from window (for Shopify stores)
+            const headers = {};
+            if (typeof window !== "undefined") {
+                if (shopDomain) {
+                    formData.append("shopDomain", shopDomain);
+                }
+                // Get customer info for tracking
+                const shopifyCustomerId = window.Shopify?.customer?.id;
+                if (shopifyCustomerId) {
+                    formData.append("shopifyCustomerId", shopifyCustomerId.toString());
+                    headers["x-shopify-customer-id"] = shopifyCustomerId.toString();
+                }
+                const customerEmail = window.Shopify?.customer?.email;
+                if (customerEmail) {
+                    formData.append("customerEmail", customerEmail);
+                }
+            }
+            logger.info("Sending try-on request", {
+                productId: currentProduct.id,
+                productName: currentProduct.name,
+                hasFullBody: !!images.fullBodyUrl,
+                hasHalfBody: !!images.halfBodyUrl,
+            });
             const response = await fetch("/api/try-on", {
                 method: "POST",
+                headers,
                 body: formData,
+                credentials: "include", // Include cookies for user ID
             });
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
@@ -25654,6 +25752,10 @@ function GlobalChatbot({ currentProduct, className }) {
             }
             const result = await response.json();
             setGeneratingProductId(null);
+            logger.info("Try-on generation successful", {
+                productId: currentProduct.id,
+                imageUrl: result.imageUrl,
+            });
             // Show success message with image in chat
             setMessages((prev) => [
                 ...prev,
@@ -25666,8 +25768,21 @@ function GlobalChatbot({ currentProduct, className }) {
             ]);
         }
         catch (err) {
-            setUploadError(err instanceof Error ? err.message : "Failed to generate try-on");
+            const errorMessage = err instanceof Error ? err.message : "Failed to generate try-on";
+            logger.error("Try-on generation failed", {
+                productId: currentProduct.id,
+                error: errorMessage,
+            });
+            setUploadError(errorMessage);
             setGeneratingProductId(null);
+            // Show error message in chat
+            setMessages((prev) => [
+                ...prev,
+                {
+                    role: "assistant",
+                    content: `Sorry, I encountered an error while generating your try-on: ${errorMessage}. Please try again.`,
+                },
+            ]);
         }
         finally {
             setIsGenerating(false);
@@ -25709,11 +25824,16 @@ function GlobalChatbot({ currentProduct, className }) {
         // Check if user images are already saved in context
         const hasSavedImages = userImages.fullBodyUrl || userImages.halfBodyUrl;
         if (hasSavedImages) {
+            logger.info("Try-on clicked with existing images", {
+                hasFullBody: !!userImages.fullBodyUrl,
+                hasHalfBody: !!userImages.halfBodyUrl,
+            });
             // Use saved images directly for try-on generation
             // handleTryOnWithUrls already handles isGenerating state
             await handleTryOnWithUrls(userImages);
         }
         else {
+            logger.info("Try-on clicked without images, opening upload dialog");
             // No images saved yet, open upload dialog
             setIsUploadDialogOpen(true);
         }
@@ -25744,8 +25864,6 @@ function GlobalChatbot({ currentProduct, className }) {
             setUploadError("Please upload at least one photo");
             return;
         }
-        setIsUploadDialogOpen(false);
-        setIsGenerating(true);
         setUploadError(null);
         try {
             // Upload user images to secure storage
@@ -25756,10 +25874,20 @@ function GlobalChatbot({ currentProduct, className }) {
             if (halfBodyPhoto) {
                 uploadFormData.append("halfBodyPhoto", halfBodyPhoto);
             }
+            // Get request headers including Shopify customer ID if available
+            const uploadHeaders = {};
+            if (typeof window !== "undefined") {
+                const shopifyCustomerId = window.Shopify?.customer?.id;
+                if (shopifyCustomerId) {
+                    uploadHeaders["x-shopify-customer-id"] = shopifyCustomerId.toString();
+                }
+            }
             logger.info("Uploading user images to secure storage");
             const uploadResponse = await fetch("/api/upload-user-images", {
                 method: "POST",
+                headers: uploadHeaders,
                 body: uploadFormData,
+                credentials: "include", // Include cookies for user ID
             });
             if (!uploadResponse.ok) {
                 const errorData = await uploadResponse.json().catch(() => ({}));
@@ -25779,7 +25907,22 @@ function GlobalChatbot({ currentProduct, className }) {
                     }
                 });
             }
-            setUserImages(newUserImages);
+            // Update context state with new images
+            setUserImages({
+                fullBodyUrl: newUserImages.fullBodyUrl || userImages.fullBodyUrl,
+                halfBodyUrl: newUserImages.halfBodyUrl || userImages.halfBodyUrl,
+            });
+            logger.info("User images saved to context", {
+                hasFullBody: !!newUserImages.fullBodyUrl,
+                hasHalfBody: !!newUserImages.halfBodyUrl,
+            });
+            // Close upload dialog
+            setIsUploadDialogOpen(false);
+            // Reset upload dialog state
+            setFullBodyPhoto(null);
+            setHalfBodyPhoto(null);
+            setFullBodyPreview(null);
+            setHalfBodyPreview(null);
             // Show success message
             setMessages((prev) => [
                 ...prev,
@@ -25791,14 +25934,6 @@ function GlobalChatbot({ currentProduct, className }) {
         }
         catch (err) {
             setUploadError(err instanceof Error ? err.message : "Failed to save images");
-        }
-        finally {
-            setIsGenerating(false);
-            // Reset upload dialog state
-            setFullBodyPhoto(null);
-            setHalfBodyPhoto(null);
-            setFullBodyPreview(null);
-            setHalfBodyPreview(null);
         }
     };
     const handleCloseDialog = () => {
@@ -25894,19 +26029,20 @@ function GlobalChatbot({ currentProduct, className }) {
                                             node_modules_react.createElement(Download, { className: "h-3.5 w-3.5" }),
                                             "Download image")))),
                                 message.recommendations && message.recommendations.length > 0 && (node_modules_react.createElement("div", { className: "mt-3 space-y-2" }, message.recommendations.map((rec, recIndex) => {
-                                    const product = products.find((p) => p.id === rec.id);
-                                    if (!product)
-                                        return null;
-                                    return (node_modules_react.createElement(next_link_namespaceObject["default"], { key: recIndex, href: `/product/${product.id}`, className: "block" },
+                                    // Recommendations now come from backend with full product details
+                                    // No need to lookup in products array - widget is lightweight
+                                    const productUrl = rec.url || `/product/${rec.id}`;
+                                    const productImage = rec.imageUrl || "/placeholder.svg";
+                                    return (node_modules_react.createElement(Link, { key: recIndex, href: productUrl, className: "block" },
                                         node_modules_react.createElement("div", { className: "p-3 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-all cursor-pointer" },
                                             node_modules_react.createElement("div", { className: "flex gap-3" },
                                                 node_modules_react.createElement("div", { className: "w-14 h-14 rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-700 flex-shrink-0 border border-white/40" },
-                                                    node_modules_react.createElement("img", { src: product.images[0] || "/placeholder.svg", alt: product.name, className: "w-full h-full object-cover" })),
+                                                    node_modules_react.createElement("img", { src: productImage, alt: rec.name, className: "w-full h-full object-cover" })),
                                                 node_modules_react.createElement("div", { className: "flex-1 min-w-0" },
-                                                    node_modules_react.createElement("p", { className: "font-medium text-xs truncate text-gray-900 dark:text-gray-100" }, product.name),
+                                                    node_modules_react.createElement("p", { className: "font-medium text-xs truncate text-gray-900 dark:text-gray-100" }, rec.name),
                                                     node_modules_react.createElement("p", { className: "text-xs font-semibold text-gray-700 dark:text-gray-300 mt-0.5" },
                                                         "$",
-                                                        product.price),
+                                                        rec.price),
                                                     node_modules_react.createElement("p", { className: "text-xs text-gray-600 dark:text-gray-400 mt-1 line-clamp-2" }, rec.reason))))));
                                 }))))))),
                         isLoading && (node_modules_react.createElement("div", { className: "flex justify-start" },
@@ -25987,113 +26123,6 @@ function GlobalChatbot({ currentProduct, className }) {
                 node_modules_react.createElement("img", { src: fullScreenImage, alt: "Full screen view", className: "max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl", onClick: (e) => e.stopPropagation() }))))));
 }
 
-;// ./src/shopify-integration.ts
-/**
- * Extract Shopify product data from page
- */
-/**
- * Extract product from Shopify global object or DOM
- */
-function getShopifyProduct() {
-    // Method 1: Shopify global object (modern themes)
-    if (typeof window !== "undefined" && window.Shopify?.product) {
-        const shopifyProduct = window.Shopify.product;
-        return mapShopifyGlobalToProduct(shopifyProduct);
-    }
-    // Method 2: Extract from DOM meta tags
-    const productJson = document.querySelector('script[type="application/json"][data-product-json]');
-    if (productJson) {
-        try {
-            const product = JSON.parse(productJson.textContent || "{}");
-            return mapShopifyGlobalToProduct(product);
-        }
-        catch (e) {
-            console.error("Failed to parse product JSON:", e);
-        }
-    }
-    // Method 3: Extract from theme-specific selectors (fallback)
-    return extractFromDOM();
-}
-function mapShopifyGlobalToProduct(shopifyProduct) {
-    return {
-        id: shopifyProduct.id || shopifyProduct.product?.id || "",
-        title: shopifyProduct.title || shopifyProduct.product?.title || "",
-        handle: shopifyProduct.handle || shopifyProduct.product?.handle || "",
-        description: shopifyProduct.description || shopifyProduct.product?.description || "",
-        product_type: shopifyProduct.product_type || shopifyProduct.product?.type || "",
-        vendor: shopifyProduct.vendor || shopifyProduct.product?.vendor,
-        tags: shopifyProduct.tags || shopifyProduct.product?.tags || [],
-        images: extractImages(shopifyProduct),
-        variants: extractVariants(shopifyProduct),
-    };
-}
-function extractImages(product) {
-    if (product.images && Array.isArray(product.images)) {
-        return product.images.map((img) => typeof img === "string" ? img : (img.url || img.src || "")).filter(Boolean);
-    }
-    if (product.product?.images) {
-        return product.product.images.map((img) => img.url || img.src || "").filter(Boolean);
-    }
-    // Extract from DOM
-    const images = Array.from(document.querySelectorAll(".product-images img, .product-photos img, .product-media img"));
-    return images.map(img => img.src || img.dataset.src || "").filter(Boolean);
-}
-function extractVariants(product) {
-    if (product.variants && Array.isArray(product.variants)) {
-        return product.variants.map((v) => ({
-            id: v.id || "",
-            title: v.title || "",
-            price: typeof v.price === "number" ? v.price : parseFloat(v.price || "0"),
-        }));
-    }
-    // Extract price from DOM
-    const priceElement = document.querySelector(".product-price, .price, [data-product-price]");
-    const priceText = priceElement?.textContent || "";
-    const price = parseFloat(priceText.replace(/[^0-9.]/g, "")) || 0;
-    return [{
-            id: "",
-            title: "",
-            price,
-        }];
-}
-function extractFromDOM() {
-    const titleElement = document.querySelector("h1.product-title, h1.product__title, [data-product-title]");
-    const title = titleElement?.textContent?.trim() || "";
-    if (!title)
-        return null;
-    return {
-        id: window.location.pathname.split("/products/")[1]?.split("?")[0] || "",
-        title,
-        handle: window.location.pathname.split("/products/")[1]?.split("?")[0] || "",
-        description: document.querySelector(".product-description, .product__description")?.textContent?.trim() || "",
-        product_type: "",
-        tags: [],
-        images: extractImages({}),
-        variants: extractVariants({}),
-    };
-}
-/**
- * Map Shopify product to Closelook Product format
- */
-function mapToCloselookProduct(shopifyProduct, shopDomain) {
-    const variant = shopifyProduct.variants[0] || { price: 0, title: "" };
-    // Extract color from tags
-    const colorTag = shopifyProduct.tags.find(tag => tag.toLowerCase().startsWith("color:"));
-    const color = colorTag ? colorTag.replace(/^color:/i, "") : variant.title.split("/")[0]?.trim() || "";
-    return {
-        id: shopifyProduct.id || shopifyProduct.handle,
-        name: shopifyProduct.title,
-        category: shopifyProduct.product_type || "Uncategorized",
-        type: shopifyProduct.product_type || "",
-        color,
-        price: variant.price,
-        images: shopifyProduct.images,
-        description: shopifyProduct.description,
-        url: `https://${shopDomain}/products/${shopifyProduct.handle}`,
-        sizes: shopifyProduct.variants.map(v => v.title).filter(Boolean),
-    };
-}
-
 // EXTERNAL MODULE: ./node_modules/style-loader/dist/runtime/injectStylesIntoStyleTag.js
 var injectStylesIntoStyleTag = __webpack_require__(72);
 var injectStylesIntoStyleTag_default = /*#__PURE__*/__webpack_require__.n(injectStylesIntoStyleTag);
@@ -26150,7 +26179,6 @@ var update = injectStylesIntoStyleTag_default()(styles/* default */.A, styles_op
 
 
 
-
 let widgetInitialized = false;
 /**
  * Initialize widget
@@ -26162,9 +26190,23 @@ function init(config) {
     }
     widgetInitialized = true;
     const { container, product, shopDomain, apiUrl } = config;
-    // Map Shopify product to Closelook format (if available)
+    // Widget only tracks minimal data - product ID/handle and shop domain
+    // All product mapping and fetching happens in the backend (Render server)
+    // This keeps the widget lightweight (UI + basic tracking only)
     const closelookProduct = product
-        ? mapToCloselookProduct(product, shopDomain)
+        ? {
+            id: product.id || product.handle || "",
+            name: product.title || product.name || "",
+            // Backend will fetch full product details from Shopify
+            // Widget only sends ID and name for context
+            // Provide minimal required fields to satisfy Product type
+            category: "",
+            type: "",
+            color: "",
+            price: 0,
+            images: [],
+            description: "",
+        }
         : undefined;
     // Override fetch to use the provided API URL
     const originalFetch = window.fetch;

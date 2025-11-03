@@ -27,6 +27,8 @@ import {
 } from "@/lib/production-enhancements"
 import { logger, sanitizeErrorForClient } from "@/lib/server-logger"
 import { addCorsHeaders, createCorsPreflightResponse } from "@/lib/cors-headers"
+import { getSession } from "@/lib/shopify/session-storage"
+import { ShopifyProductAdapter } from "@/lib/closelook-plugin/adapters/shopify-adapter"
 
 // Handle OPTIONS requests for CORS preflight
 export async function OPTIONS(request: NextRequest) {
@@ -63,6 +65,94 @@ export async function POST(request: NextRequest) {
     const customerEmail = formData.get("customerEmail") as string | null
     const shopifyCustomerId = formData.get("shopifyCustomerId") as string | null
 
+    // PRODUCTION: Fetch product images from Shopify Storefront API if shop domain and product ID are provided
+    // This reduces theme coupling and improves performance by avoiding client-side image fetching
+    let fetchedProductData: { name?: string; category?: string; images?: string[] } | null = null
+    if (shopDomain && productId && productImages.length === 0) {
+      try {
+        logger.info("Fetching product images from Shopify Storefront API", { requestId, shopDomain, productId })
+        
+        // Get Shopify session to access Storefront API
+        const session = await getSession(shopDomain)
+        
+        // Check if we have storefront token
+        const storefrontToken = process.env.SHOPIFY_STOREFRONT_TOKEN || session?.storefrontToken
+        
+        if (storefrontToken) {
+          const adapter = new ShopifyProductAdapter(shopDomain, storefrontToken)
+          
+          // Fetch product from Shopify Storefront API
+          const closelookProduct = await adapter.getProduct(productId)
+          
+          if (closelookProduct && closelookProduct.images && closelookProduct.images.length > 0) {
+            fetchedProductData = {
+              name: closelookProduct.name,
+              category: closelookProduct.category,
+              images: closelookProduct.images,
+            }
+            
+            logger.info("Successfully fetched product from Shopify", { 
+              requestId, 
+              productName: closelookProduct.name,
+              imageCount: closelookProduct.images.length 
+            })
+            
+            // Download images from Shopify CDN and convert to File objects
+            const maxProductImages = 3
+            const productImagesToFetch = closelookProduct.images.slice(0, maxProductImages)
+            
+            for (let i = 0; i < productImagesToFetch.length; i++) {
+              try {
+                const imageUrl = productImagesToFetch[i]
+                logger.debug("Fetching product image from Shopify CDN", { requestId, imageUrl })
+                
+                const imageResponse = await fetch(imageUrl)
+                if (!imageResponse.ok) {
+                  logger.warn("Failed to fetch product image", { requestId, status: imageResponse.status })
+                  continue
+                }
+                
+                const imageBlob = await imageResponse.blob()
+                const imageFile = new File([imageBlob], `product-${i}.jpg`, { type: imageBlob.type || 'image/jpeg' })
+                productImages.push(imageFile)
+                
+                logger.debug("Successfully fetched product image", { requestId, index: i })
+              } catch (error) {
+                logger.warn("Error fetching product image", { 
+                  requestId, 
+                  index: i, 
+                  error: error instanceof Error ? error.message : String(error) 
+                })
+                // Continue with other images
+              }
+            }
+            
+            // Override product metadata with Shopify data if not provided
+            if (!productName && closelookProduct.name) {
+              const nameField = "productName"
+              // Note: Can't modify formData, so we'll handle this in the processing logic
+            }
+          } else {
+            logger.warn("Product fetched from Shopify but no images available", { requestId, productId })
+          }
+        } else {
+          logger.warn("No storefront token available for Shopify product fetch", { requestId, shopDomain })
+        }
+      } catch (error) {
+        logger.error("Error fetching product from Shopify Storefront API", {
+          requestId,
+          error: error instanceof Error ? error.message : String(error),
+          shopDomain,
+          productId,
+        })
+        // Continue with client-provided images if available
+      }
+    }
+
+    // If we successfully fetched product data from Shopify, use it
+    const effectiveProductName = productName || fetchedProductData?.name || ""
+    const effectiveProductCategory = productCategory || fetchedProductData?.category || ""
+
     // Input validation
     if (!userPhoto && !fullBodyUrl && !halfBodyUrl) {
       logger.warn("Validation failed: Missing user photo", { requestId })
@@ -75,7 +165,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    if (productImages.length === 0 || !productName) {
+    if (productImages.length === 0 || !effectiveProductName) {
       logger.warn("Validation failed: Missing required fields", { requestId })
       return NextResponse.json(
         {
@@ -117,7 +207,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    logger.info("Try-on request received", { requestId, productName, imageCount: productImages.length })
+    logger.info("Try-on request received", { requestId, productName: effectiveProductName, imageCount: productImages.length })
     if (userPhotoValidation && userPhotoValidation.warnings.length > 0) {
       logger.warn("User photo warnings", { requestId, warnings: userPhotoValidation.warnings })
     }
@@ -143,7 +233,7 @@ export async function POST(request: NextRequest) {
       logger.info("URL-based request detected, analyzing product category first", { requestId })
       
       // Quick category detection to choose image (simplified - just use product name/category)
-      const categoryType = mapCategoryToType(productCategory || "Unknown")
+      const categoryType = mapCategoryToType(effectiveProductCategory || "Unknown")
       const requiresFullBody = categoryType === "FOOTWEAR" || categoryType === "CLOTHING_LOWER" || categoryType === "CLOTHING_FULL"
       
       // Choose appropriate image based on category
@@ -244,18 +334,18 @@ export async function POST(request: NextRequest) {
       }
 
       // Sanitize metadata early (category config will be added later)
-      productMetadata.productCategory = sanitizeCategory(productMetadata.productCategory || productCategory || "Fashion Accessory")
+      productMetadata.productCategory = sanitizeCategory(productMetadata.productCategory || effectiveProductCategory || "Fashion Accessory")
       productMetadata.detailedVisualDescription = sanitizeDescription(
-        productMetadata.detailedVisualDescription || `${productName} - A stylish product with premium design.`,
+        productMetadata.detailedVisualDescription || `${effectiveProductName} - A stylish product with premium design.`,
       )
     } else {
       logger.warn("Product analysis failed, using fallback", { requestId })
       usedFallback = true
-      const fallbackCategory = sanitizeCategory(productCategory || "Fashion Accessory")
+      const fallbackCategory = sanitizeCategory(effectiveProductCategory || "Fashion Accessory")
       productMetadata = {
         productCategory: fallbackCategory,
         detailedVisualDescription: sanitizeDescription(
-          `${productName} - A stylish ${fallbackCategory} with premium design and quality materials.`,
+          `${effectiveProductName} - A stylish ${fallbackCategory} with premium design and quality materials.`,
         ),
         imageGenerationPrompt: `Show the person wearing the ${fallbackCategory} in a natural, confident pose. Position the product prominently so it's clearly visible. Use professional studio lighting and a clean background.`,
         cameraHint: "Unknown",
@@ -295,12 +385,12 @@ export async function POST(request: NextRequest) {
     logger.debug("Images uploaded successfully", { requestId })
 
     // Map detected category to our standardized category type
-    const detectedCategory = productMetadata.productCategory || productCategory || "Unknown"
+    const detectedCategory = productMetadata.productCategory || effectiveProductCategory || "Unknown"
     const categoryType = mapCategoryToType(detectedCategory)
     const categoryConfig = getCategoryConfig(categoryType, detectedCategory)
 
     // Enhance metadata with category config now that it's available
-    productMetadata = enhanceProductMetadata(productMetadata, productName, productCategory, categoryConfig)
+    productMetadata = enhanceProductMetadata(productMetadata, effectiveProductName, effectiveProductCategory, categoryConfig)
 
     logger.debug("Detected category", { requestId, detectedCategory, categoryType })
 
@@ -361,7 +451,7 @@ export async function POST(request: NextRequest) {
       userImageUrl: userPhotoBlob.url,
       productImageUrls: productImageBlobs.map((b) => b.url).join(", "),
       productCategory: detectedCategory,
-      productDescription: productMetadata.detailedVisualDescription || sanitizeDescription(`${productName} - a stylish ${detectedCategory}`),
+      productDescription: productMetadata.detailedVisualDescription || sanitizeDescription(`${effectiveProductName} - a stylish ${detectedCategory}`),
       genImageInstructions: productMetadata.imageGenerationPrompt || `Show the person wearing the ${detectedCategory} in a natural, confident pose. Position the product prominently so it's clearly visible. Use professional studio lighting and a clean background.`,
       userCharacteristicsJson: userCharacteristicsJson,
       userGender: userGender,
@@ -474,7 +564,7 @@ export async function POST(request: NextRequest) {
     if (shopDomain) {
       trackTryOnEvent(shopDomain, {
         product_id: productId || undefined,
-        product_name: productName || undefined,
+        product_name: effectiveProductName || undefined,
         product_url: productUrl || undefined,
         product_image_url: productImageBlobs[0]?.url || undefined,
         customer_id: customerId || undefined,
@@ -494,7 +584,7 @@ export async function POST(request: NextRequest) {
 
     const response = NextResponse.json({
       imageUrl,
-      productName,
+      productName: effectiveProductName,
       metadata: {
         model: "closelook-v1",
         timestamp: new Date().toISOString(),
@@ -539,4 +629,8 @@ export async function POST(request: NextRequest) {
     const response = NextResponse.json(sanitizedError, { status: statusCode })
     return addCorsHeaders(response, request)
   }
+}
+
+export const config = {
+  maxDuration: 300,
 }
