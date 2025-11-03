@@ -34,6 +34,8 @@
     halfBodyPhoto: null,
     fullBodyPreview: null,
     halfBodyPreview: null,
+    fullBodyUrl: null, // Saved image URL from server
+    halfBodyUrl: null, // Saved image URL from server
     fullScreenImage: null,
     currentProduct: null,
     productCatalog: [] // Store catalog for recommendation mapping
@@ -153,7 +155,30 @@
     // Show prompt templates on first load
     renderPromptTemplates();
 
+    // Fetch user images on initialization
+    fetchAndStoreUserImages();
+
     console.log('🚀 Chatbot initialized');
+  }
+
+  // Fetch and store user images from server
+  async function fetchAndStoreUserImages() {
+    try {
+      const userImages = await fetchUserImages();
+      if (userImages.fullBodyUrl) {
+        state.fullBodyUrl = userImages.fullBodyUrl;
+        state.fullBodyPreview = userImages.fullBodyUrl; // Display saved image
+        console.log('✅ Loaded full body image from server');
+      }
+      if (userImages.halfBodyUrl) {
+        state.halfBodyUrl = userImages.halfBodyUrl;
+        state.halfBodyPreview = userImages.halfBodyUrl; // Display saved image
+        console.log('✅ Loaded half body image from server');
+      }
+    } catch (error) {
+      console.debug('Could not fetch user images on init:', error);
+      // Silently fail - images might not exist yet
+    }
   }
 
   // Render context-aware prompt templates (exact match of original)
@@ -432,6 +457,7 @@
           <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
           <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
         </svg>
+        <p class="chatbot-loading-text">Thinking...</p>
       `;
       loadingDiv.appendChild(bubbleDiv);
       container.appendChild(loadingDiv);
@@ -678,17 +704,33 @@
       return;
     }
 
+    if (state.isGenerating) {
+      console.log('⏳ Try-on already in progress, ignoring click');
+      return;
+    }
+
     // Check if user has saved images
     try {
+      console.log('🔍 Checking for saved user images...');
       const userImages = await fetchUserImages();
+      console.log('📸 User images check result:', {
+        hasFullBody: !!userImages.fullBodyUrl,
+        hasHalfBody: !!userImages.halfBodyUrl,
+        fullBodyUrl: userImages.fullBodyUrl,
+        halfBodyUrl: userImages.halfBodyUrl
+      });
+
       if (!userImages.fullBodyUrl && !userImages.halfBodyUrl) {
+        console.log('📤 No images found, opening upload dialog');
         state.isUploadDialogOpen = true;
         renderUploadDialog();
       } else {
+        console.log('✅ Images found, generating try-on...');
         await performVirtualTryOn(userImages);
       }
     } catch (error) {
-      console.error('Error checking user images:', error);
+      console.error('❌ Error checking user images:', error);
+      // If error fetching, still try to open upload dialog as fallback
       state.isUploadDialogOpen = true;
       renderUploadDialog();
     }
@@ -697,16 +739,30 @@
   async function fetchUserImages() {
     const backendUrl = config.backendUrl.replace(/\/$/, '') + '/api/user-images';
     try {
+      // Get Shopify customer ID from window if available (for Shopify stores)
+      const shopifyCustomerId = typeof window !== 'undefined' 
+        ? (window.Shopify?.customer?.id) 
+        : null;
+
+      const headers = {};
+      if (shopifyCustomerId) {
+        headers['x-shopify-customer-id'] = shopifyCustomerId.toString();
+      }
+
       const response = await fetch(backendUrl, {
         method: 'GET',
+        headers: headers,
         credentials: 'include'
       });
 
       if (response.ok) {
         const result = await response.json();
+        console.log('✅ User images fetched:', result.images);
         return result.images || {};
       } else if (response.status !== 400) {
         console.warn('Failed to fetch user images:', response.status);
+        const errorData = await response.json().catch(() => ({}));
+        console.warn('Error details:', errorData);
       }
       return {};
     } catch (error) {
@@ -894,7 +950,13 @@
     }
   }
 
-  function handleUploadClick() {
+  async function handleUploadClick() {
+    // Fetch user images before opening dialog to show saved images
+    try {
+      await fetchAndStoreUserImages();
+    } catch (error) {
+      console.debug('Could not fetch images before opening dialog:', error);
+    }
     state.isUploadDialogOpen = true;
     renderUploadDialog();
   }
@@ -931,9 +993,9 @@
             <label class="chatbot-upload-dialog-label">Standing Photo</label>
             <div class="chatbot-upload-dialog-dropzone" id="full-body-dropzone">
               <input type="file" accept="image/*" class="chatbot-upload-dialog-input" id="full-body-input">
-              ${state.fullBodyPreview ? `
+              ${(state.fullBodyPreview || state.fullBodyUrl) ? `
                 <div class="chatbot-upload-dialog-preview">
-                  <img src="${state.fullBodyPreview}" alt="Preview">
+                  <img src="${state.fullBodyPreview || state.fullBodyUrl}" alt="Full body photo">
                   <button class="chatbot-upload-dialog-remove" id="remove-full-body">×</button>
                 </div>
               ` : `
@@ -956,9 +1018,9 @@
             <label class="chatbot-upload-dialog-label">Portrait Photo</label>
             <div class="chatbot-upload-dialog-dropzone" id="half-body-dropzone">
               <input type="file" accept="image/*" class="chatbot-upload-dialog-input" id="half-body-input">
-              ${state.halfBodyPreview ? `
+              ${(state.halfBodyPreview || state.halfBodyUrl) ? `
                 <div class="chatbot-upload-dialog-preview">
-                  <img src="${state.halfBodyPreview}" alt="Preview">
+                  <img src="${state.halfBodyPreview || state.halfBodyUrl}" alt="Half body photo">
                   <button class="chatbot-upload-dialog-remove" id="remove-half-body">×</button>
                 </div>
               ` : `
@@ -1051,7 +1113,12 @@
 
     if (saveBtn) {
       saveBtn.onclick = async () => {
-        if (!state.fullBodyPhoto && !state.halfBodyPhoto) return;
+        // Allow save if there are new photos OR if images are already saved (to allow re-upload)
+        if (!state.fullBodyPhoto && !state.halfBodyPhoto && !state.fullBodyUrl && !state.halfBodyUrl) {
+          state.uploadError = 'Please upload at least one photo';
+          renderUploadDialog();
+          return;
+        }
         await handleSaveUpload();
       };
     }
@@ -1078,9 +1145,11 @@
     if (type === 'fullBody') {
       state.fullBodyPhoto = null;
       state.fullBodyPreview = null;
+      state.fullBodyUrl = null; // Clear saved URL as well
     } else {
       state.halfBodyPhoto = null;
       state.halfBodyPreview = null;
+      state.halfBodyUrl = null; // Clear saved URL as well
     }
     renderUploadDialog();
   }
@@ -1102,14 +1171,26 @@
 
       const backendUrl = config.backendUrl.replace(/\/$/, '') + '/api/upload-user-images';
       
+      // Get Shopify customer ID from window if available (for Shopify stores)
+      const shopifyCustomerId = typeof window !== 'undefined' 
+        ? (window.Shopify?.customer?.id) 
+        : null;
+
+      const headers = {};
+      if (shopifyCustomerId) {
+        headers['x-shopify-customer-id'] = shopifyCustomerId.toString();
+      }
+      
       console.log('📤 Uploading images to:', backendUrl);
       console.log('📤 FormData:', {
         hasFullBody: !!state.fullBodyPhoto,
-        hasHalfBody: !!state.halfBodyPhoto
+        hasHalfBody: !!state.halfBodyPhoto,
+        shopifyCustomerId: shopifyCustomerId
       });
 
       const response = await fetch(backendUrl, {
         method: 'POST',
+        headers: headers,
         body: formData,
         credentials: 'include',
         // Don't set Content-Type header - browser will set it automatically with boundary for FormData
@@ -1133,6 +1214,30 @@
 
       const result = await response.json();
       console.log('✅ Upload successful:', result);
+
+      // Clear local previews (temporary upload state)
+      state.fullBodyPhoto = null;
+      state.halfBodyPhoto = null;
+      state.fullBodyPreview = null;
+      state.halfBodyPreview = null;
+
+      // Fetch and store the uploaded images from server
+      // This ensures we have the correct URLs that are saved to the database
+      try {
+        const userImages = await fetchUserImages();
+        if (userImages.fullBodyUrl) {
+          state.fullBodyUrl = userImages.fullBodyUrl;
+          state.fullBodyPreview = userImages.fullBodyUrl; // Display saved image
+          console.log('✅ Stored full body image URL:', userImages.fullBodyUrl);
+        }
+        if (userImages.halfBodyUrl) {
+          state.halfBodyUrl = userImages.halfBodyUrl;
+          state.halfBodyPreview = userImages.halfBodyUrl; // Display saved image
+          console.log('✅ Stored half body image URL:', userImages.halfBodyUrl);
+        }
+      } catch (error) {
+        console.warn('Failed to fetch uploaded images after save:', error);
+      }
 
       closeUploadDialog();
 

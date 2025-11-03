@@ -1026,8 +1026,9 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
 
                 {isLoading && (
                   <div className="flex justify-start">
-                    <div className="bg-gray-100 dark:bg-gray-800 rounded-2xl px-4 py-2.5 border border-gray-200 dark:border-gray-700">
+                    <div className="bg-gray-100 dark:bg-gray-800 rounded-2xl px-4 py-3 border border-gray-200 dark:border-gray-700 flex items-center gap-2">
                       <Loader2 className="h-4 w-4 animate-spin text-gray-600 dark:text-gray-400" />
+                      <span className="text-sm text-gray-600 dark:text-gray-400">Thinking...</span>
                     </div>
                   </div>
                 )}
