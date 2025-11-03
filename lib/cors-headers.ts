@@ -83,13 +83,14 @@ export function createCorsPreflightResponse(request: NextRequest): NextResponse 
   
   if (isAllowedOrigin(origin) && origin) {
     response.headers.set("Access-Control-Allow-Origin", origin)
-    response.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+    response.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
     response.headers.set(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, x-shopify-customer-id, x-user-id, x-shopify-shop"
+      "Content-Type, Authorization, x-shopify-customer-id, x-user-id, x-shopify-shop, x-shopify-access-token, x-shopify-domain"
     )
     response.headers.set("Access-Control-Allow-Credentials", "true")
     response.headers.set("Access-Control-Max-Age", "86400")
+    response.headers.set("X-Frame-Options", "ALLOWALL") // Allow embedding in Shopify iframes
   }
   
   return response
