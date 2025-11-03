@@ -8,7 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { MessageCircle, X, Send, Loader2, Upload, UploadCloud, Image as ImageIcon, Download, Lock, Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { Product, TryOnResult } from "@/lib/closelook-types"
-import Link from "next/link"
+import { Link } from "next/link"
 import { useCloselook } from "@/components/closelook-provider"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
@@ -17,6 +17,7 @@ const logger = {
   info: (...args: any[]) => console.log("[INFO]", ...args),
   warn: (...args: any[]) => console.warn("[WARN]", ...args),
   error: (...args: any[]) => console.error("[ERROR]", ...args),
+  debug: (...args: any[]) => console.log("[DEBUG]", ...args),
 }
 
 interface Message {
