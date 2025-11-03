@@ -2,7 +2,7 @@
 
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { CheckCircle2, MessageCircle, Settings, ExternalLink } from "lucide-react"
+import { CheckCircle2, MessageCircle, Settings, ExternalLink, Sparkles } from "lucide-react"
 import { useSearchParams } from "next/navigation"
 import { Suspense } from "react"
 
