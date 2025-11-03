@@ -6,18 +6,18 @@ Go to Render Dashboard → Your Service → Environment
 
 ### 1. Database (REQUIRED)
 ```
-DATABASE_URL=postgresql://neondb_owner:npg_khfAHwuo17Vp@ep-plain-paper-a4mlrvke-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+DATABASE_URL=<your-neon-database-connection-string>
 ```
 
-### 2. Shopify App (from Partners Dashboard)
+### 2. Shopify App (REQUIRED)
 ```
-SHOPIFY_API_KEY=95615e8665f0cb731eab0dbd66b69ebd
-SHOPIFY_API_SECRET=<get-from-shopify-partners>
+SHOPIFY_API_KEY=<from-shopify-partners-dashboard>
+SHOPIFY_API_SECRET=<from-shopify-partners-dashboard>
 SHOPIFY_APP_URL=https://vton-1-hqmc.onrender.com
 SHOPIFY_SCOPES=read_products,read_content,read_orders,read_customers,write_customers,read_themes
 ```
 
-### 3. AI Services (REQUIRED for features)
+### 3. AI Services (REQUIRED)
 ```
 GEMINI_API_KEY=<your-gemini-api-key>
 REPLICATE_API_TOKEN=<your-replicate-api-token>
