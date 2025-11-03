@@ -1688,6 +1688,7 @@
       // Return empty array - backend can still work with empty catalog or fetch server-side
       return [];
     }
+    */
   }
 
   // Order history is fetched by backend via Shopify Admin API when needed
