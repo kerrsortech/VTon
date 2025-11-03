@@ -3,11 +3,13 @@
  */
 
 export interface ShopifySession {
-  shop: string
-  accessToken: string
-  scope: string
-  expires?: Date
-  isOnline?: boolean
+  shop: string // myshopify.com domain (e.g., store.myshopify.com)
+  accessToken: string // Admin API access token
+  scope: string // OAuth scopes granted
+  expires?: Date // Token expiration date (for online tokens)
+  isOnline?: boolean // Whether this is an online (user) or offline (app) token
+  storefrontToken?: string // Storefront API token for public queries (PRODUCTION FIX)
+  customDomain?: string // Custom domain if merchant uses one (e.g., www.example.com) (PRODUCTION FIX)
 }
 
 export interface ShopifyProduct {

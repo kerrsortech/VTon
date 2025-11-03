@@ -1,0 +1,4 @@
+https://developers-trivia-drink-consolidation.trycloudflare.com
+
+Use this URL in your extension's "Backend API URL" setting in Shopify admin.
+

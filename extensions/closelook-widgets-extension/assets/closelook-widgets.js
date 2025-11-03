@@ -502,25 +502,49 @@
 
       if (typeof window !== 'undefined') {
         try {
-          // Detect shop domain - multiple methods
+          // PRODUCTION FIX: Robust shop domain detection
+          // Priority order: window.Shopify.shop > meta tag > liquid variable > hostname
+          
           const shopify = window.Shopify;
+          
+          // Method 1: window.Shopify.shop (MOST RELIABLE - always myshopify.com format)
           if (shopify?.shop) {
             shopDomain = shopify.shop;
+            console.log('[Closelook] Shop domain from Shopify object:', shopDomain);
           }
-
+          
+          // Method 2: Meta tag (theme may provide this)
           if (!shopDomain) {
             const shopMeta = document.querySelector('meta[name="shopify-shop"]');
             if (shopMeta) {
               shopDomain = shopMeta.getAttribute('content');
+              console.log('[Closelook] Shop domain from meta tag:', shopDomain);
             }
           }
-
+          
+          // Method 3: Data attribute from liquid (if widget passes it)
+          if (!shopDomain) {
+            const widgetElement = document.querySelector('[data-shop-domain]');
+            if (widgetElement) {
+              shopDomain = widgetElement.getAttribute('data-shop-domain');
+              console.log('[Closelook] Shop domain from data attribute:', shopDomain);
+            }
+          }
+          
+          // Method 4: Parse from hostname (only works on myshopify.com, not custom domains)
           if (!shopDomain) {
             const hostname = window.location.hostname;
             const shopMatch = hostname.match(/([^.]+)\.myshopify\.com/);
             if (shopMatch) {
               shopDomain = `${shopMatch[1]}.myshopify.com`;
+              console.log('[Closelook] Shop domain from hostname:', shopDomain);
             }
+          }
+          
+          // IMPORTANT: On custom domains, methods 1-3 should work
+          // Backend will handle domain mapping (custom domain -> myshopify.com)
+          if (!shopDomain) {
+            console.warn('[Closelook] Could not determine shop domain - widget may not work correctly');
           }
 
           // Detect customer (exact copy of customer-detector.ts logic)
@@ -583,18 +607,16 @@
         }
       }
 
-      // Fetch product catalog (order history is fetched by backend when needed)
-      const productCatalog = await fetchProductCatalog();
-
-      // Store product catalog in state for recommendation mapping
-      state.productCatalog = productCatalog;
-
-      // Build complete payload (exact match of original backend expectations)
+      // PRODUCTION FIX: Do NOT fetch products client-side
+      // Backend handles all product fetching via Storefront API using session
+      // This eliminates /products.json access issues and improves performance
+      
+      // Build complete payload - backend will fetch products using shop domain
       const payload = {
         message: message,
         conversationHistory: conversationHistory,
         pageContext: pageContext, // 'home' | 'product' | 'other'
-        shop: shopDomain, // Shopify shop domain for backend API calls
+        shop: shopDomain, // CRITICAL: Backend uses this to fetch products via Storefront API
         customerName: customerName, // Customer name for personalization (only name, not sensitive data)
         customerInternal: customerInternal, // Internal customer info for backend API calls (id, email, accessToken)
         currentProduct: state.currentProduct ? {
@@ -606,28 +628,11 @@
           price: state.currentProduct.price,
           description: state.currentProduct.description,
           sizes: state.currentProduct.sizes,
-          url: state.currentProduct.url || currentPageUrl // Current page URL
-        } : undefined,
-        allProducts: productCatalog.map(p => {
-          // Map Shopify product format to backend expected format
-          // Backend expects: {id, name, category, type, color, price, sizes}
-          // Shopify provides: {id, title, handle, type, product_type, variants, images, ...}
-          const variant = p.variants?.[0] || {};
-          return {
-            id: p.id?.toString() || p.handle || '', // Use ID for matching, handle for URLs
-            handle: p.handle || '', // Store handle for URL generation
-            name: p.title || '',
-            category: p.type || p.product_type || '',
-            type: p.type || p.product_type || '',
-            color: variant.option1 || '',
-            price: parseFloat(variant.price || 0) / 100,
-            description: p.body_html || p.description || '',
-            sizes: p.variants?.map(v => v.option2 || v.option3).filter(Boolean) || [],
-            imageUrl: p.featured_image || (p.images?.[0] ? (typeof p.images[0] === 'string' ? p.images[0] : p.images[0].src || p.images[0].url) : null),
-            images: p.images?.map(img => typeof img === 'string' ? img : (img.src || img.url)) || []
-          };
-        })
-        // orderHistory is fetched by backend via Shopify Admin API when needed
+          url: state.currentProduct.url || currentPageUrl // Current page URL for product page analysis
+        } : undefined
+        // REMOVED: allProducts field
+        // Backend fetches products from Shopify Storefront API using session's storefront token
+        // See app/api/chat/route.ts lines 269-346 for implementation
       };
 
       const response = await fetch(backendUrl, {
@@ -1058,7 +1063,7 @@
         </div>
         <div class="chatbot-upload-dialog-actions">
           <button class="chatbot-upload-dialog-cancel" id="cancel-upload-dialog">Cancel</button>
-          <button class="chatbot-upload-dialog-save" id="save-upload-dialog" ${!state.fullBodyPhoto && !state.halfBodyPhoto ? 'disabled' : ''}>Save</button>
+          <button class="chatbot-upload-dialog-save" id="save-upload-dialog" ${(!state.fullBodyPhoto && !state.halfBodyPhoto && !state.fullBodyUrl && !state.halfBodyUrl) || state.isGenerating ? 'disabled' : ''}>Save</button>
         </div>
       </div>
     `;
@@ -1112,13 +1117,29 @@
     }
 
     if (saveBtn) {
-      saveBtn.onclick = async () => {
+      // Update button disabled state based on current state
+      if (!state.fullBodyPhoto && !state.halfBodyPhoto && !state.fullBodyUrl && !state.halfBodyUrl) {
+        saveBtn.disabled = true;
+      } else {
+        saveBtn.disabled = false;
+      }
+      
+      saveBtn.onclick = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
         // Allow save if there are new photos OR if images are already saved (to allow re-upload)
         if (!state.fullBodyPhoto && !state.halfBodyPhoto && !state.fullBodyUrl && !state.halfBodyUrl) {
           state.uploadError = 'Please upload at least one photo';
           renderUploadDialog();
           return;
         }
+        
+        // Prevent double-clicks
+        if (saveBtn.disabled || state.isGenerating) {
+          return;
+        }
+        
         await handleSaveUpload();
       };
     }
@@ -1137,6 +1158,14 @@
         state.halfBodyPreview = e.target.result;
       }
       renderUploadDialog();
+      
+      // Ensure save button is enabled after image selection
+      setTimeout(() => {
+        const saveBtn = document.getElementById('save-upload-dialog');
+        if (saveBtn && (state.fullBodyPhoto || state.halfBodyPhoto || state.fullBodyUrl || state.halfBodyUrl)) {
+          saveBtn.disabled = false;
+        }
+      }, 0);
     };
     reader.readAsDataURL(file);
   }
@@ -1571,8 +1600,26 @@
 
   // Fetch product catalog from Shopify AJAX API (public endpoint)
   async function fetchProductCatalog() {
+    // PRODUCTION FIX: Backend handles all product fetching via Storefront API
+    // Widget only needs to send shop domain, backend will fetch products using session
+    // 
+    // This fixes multiple critical issues:
+    // 1. /products.json may be restricted by theme/app settings
+    // 2. Limited to 250 products (no pagination)
+    // 3. Redundant - backend already fetches via Shopify Storefront API
+    // 4. Increases widget load time and failure rate
+    // 5. Creates double work and network overhead
+    //
+    // Backend implementation (app/api/chat/route.ts lines 269-346) handles:
+    // - Session lookup by shop domain (including custom domains)
+    // - Storefront API token retrieval from session
+    // - Product fetching via ShopifyProductAdapter
+    // - Proper error handling and fallbacks
+    
+    console.log('🔧 [Closelook Widget] Product fetching delegated to backend (Storefront API)');
+    
     try {
-      // Get shop domain
+      // Get shop domain for logging
       let shopDomain = window.Shopify?.shop || 
                       document.querySelector('meta[name="shopify-shop"]')?.getAttribute('content');
       
@@ -1585,11 +1632,23 @@
       }
 
       if (shopDomain) {
-        // Fetch from Shopify AJAX API (public endpoint - no auth needed)
-        // Limit to reasonable number - backend will handle semantic search for large catalogs
-        // Create timeout controller for compatibility
+        console.log(`🔧 [Closelook Widget] Shop domain: ${shopDomain} - Backend will fetch products`);
+      }
+    } catch (error) {
+      console.debug('[Closelook Widget] Could not determine shop domain:', error);
+    }
+
+    // Return empty array - backend handles all product retrieval
+    // Widget only sends shop domain in chat API payload
+    return [];
+    
+    // OLD CODE REMOVED - Do not uncomment unless backend product fetching fails
+    // The following code tried to fetch products client-side but had multiple issues:
+    /*
+    try {
+      if (shopDomain) {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
         
         try {
           const response = await fetch(`https://${shopDomain}/collections/all/products.json?limit=250`, {

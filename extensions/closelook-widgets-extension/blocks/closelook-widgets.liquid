@@ -123,6 +123,11 @@
 </div>
 {% endif %}
 
+<!-- Inject backend URL from settings -->
+<script>
+  window.closelookBackendUrl = {{ block.settings.backend_url | json }};
+</script>
+
 <!-- Load External CSS File -->
 {{ 'closelook-widgets.css' | asset_url | stylesheet_tag }}
 
@@ -138,6 +143,7 @@
       "type": "text",
       "id": "backend_url",
       "label": "Backend API URL",
+      "info": "For local development, use your Shopify CLI tunnel URL or ngrok URL (e.g., https://abc123.app.sh or https://abc123.ngrok.io). For production, use: https://vton-1-hqmc.onrender.com",
       "default": "https://vton-1-hqmc.onrender.com"
     },
     {
