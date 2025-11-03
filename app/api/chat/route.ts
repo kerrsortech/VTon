@@ -23,6 +23,7 @@ import { validateChatInput } from "@/lib/production-validation"
 import { addCorsHeaders, createCorsPreflightResponse, isAllowedOrigin } from "@/lib/cors-headers"
 import { ShopifyProductAdapter } from "@/lib/closelook-plugin/adapters/shopify-adapter"
 import type { CloselookProduct } from "@/lib/closelook-plugin/types"
+import { analyzeProductPage } from "@/lib/product-page-analyzer"
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "")
 
@@ -83,6 +84,8 @@ IMPORTANT:
    - Format: TICKET_CREATION: {"issue": "customer's issue description", "customerName": "customer name if available"}
    - Only suggest ticket creation when truly necessary - don't over-escalate
 
+12. **Product Page Analysis**: When DETAILED PRODUCT ANALYSIS is provided in the context, use it comprehensively to answer questions about the product. The analysis contains information extracted directly from the product page, including design elements, materials, key features, and enhanced descriptions. Always prioritize this detailed analysis when answering questions about the current product.
+
 Key Guidelines:
 - Keep responses concise but informative (2-4 sentences typically, more if needed for order/policy details)
 - When recommending products, always use the PRODUCT_RECOMMENDATION format
@@ -124,6 +127,44 @@ function isProductSearchQuery(message: string): boolean {
   ]
   const lowerMessage = message.toLowerCase()
   return searchKeywords.some((keyword) => lowerMessage.includes(keyword))
+}
+
+// Detect if the user is asking about the current product
+function isAskingAboutCurrentProduct(message: string, hasCurrentProduct: boolean): boolean {
+  if (!hasCurrentProduct) return false
+  
+  const lowerMessage = message.toLowerCase().trim()
+  
+  // Keywords that indicate asking about current product
+  const currentProductKeywords = [
+    "tell me more about this",
+    "tell me about this",
+    "tell me more",
+    "what is this",
+    "what's this",
+    "about this product",
+    "about this",
+    "details about this",
+    "more details",
+    "describe this",
+    "explain this",
+    "what can you tell me",
+    "what do you know",
+    "what are the features",
+    "what are the specs",
+    "specifications",
+    "features",
+    "information about",
+    "details",
+  ]
+  
+  return currentProductKeywords.some((keyword) => lowerMessage.includes(keyword)) ||
+    // Also match if message is just asking about product in general on product page
+    (lowerMessage.length < 30 && (
+      lowerMessage.includes("this") ||
+      lowerMessage.includes("product") ||
+      lowerMessage.includes("item")
+    ))
 }
 
 export async function POST(request: NextRequest) {
@@ -259,6 +300,64 @@ export async function POST(request: NextRequest) {
     
     // Use fetched products from backend, fallback to products from request (for demo/Next.js app)
     const allProductsToUse = fetchedProducts.length > 0 ? fetchedProducts : (allProducts || [])
+    
+    // Detect if user is asking about current product and analyze product page if needed
+    const isProductInquiry = isAskingAboutCurrentProduct(message, !!currentProduct)
+    let productPageAnalysis = null
+    
+    if (isProductInquiry && currentProduct) {
+      try {
+        // Construct product URL
+        let productUrl: string | undefined = undefined
+        
+        // Priority 1: Use product.url from request if available (already validated in frontend)
+        if (currentProduct.url && typeof currentProduct.url === "string" && currentProduct.url.startsWith("http")) {
+          productUrl = currentProduct.url
+        } 
+        // Priority 2: Construct URL from shop domain if available
+        else if (shop && currentProduct.id) {
+          // For Shopify stores, construct the product URL
+          // Note: This uses product ID, but Shopify URLs typically use handle
+          // However, this should still work for page analysis
+          const shopDomain = shop.replace(/\.myshopify\.com$/, '')
+          productUrl = `https://${shopDomain}.myshopify.com/products/${currentProduct.id}`
+        }
+        // For demo/Next.js app with relative URLs, skip analysis
+        else if (currentProduct.id) {
+          // We can't analyze relative URLs, so skip
+          logger.debug("Skipping page analysis for relative URL", { productId: currentProduct.id })
+        }
+        
+        // Analyze product page if we have a valid URL
+        if (productUrl) {
+          logger.info("Analyzing product page for inquiry", { productUrl, productId: currentProduct.id })
+          const apiKey = process.env.GOOGLE_GEMINI_API_KEY
+          if (apiKey) {
+            try {
+              productPageAnalysis = await analyzeProductPage(productUrl, apiKey).catch((error) => {
+                logger.warn("Product page analysis failed, continuing without it", { 
+                  error: error instanceof Error ? error.message : String(error),
+                  productUrl 
+                })
+                return null
+              })
+              
+              if (productPageAnalysis) {
+                logger.info("Product page analysis successful", { productId: currentProduct.id })
+              }
+            } catch (error) {
+              logger.warn("Error during product page analysis", { 
+                error: error instanceof Error ? error.message : String(error) 
+              })
+            }
+          }
+        }
+      } catch (error) {
+        logger.warn("Error in product page analysis flow", { 
+          error: error instanceof Error ? error.message : String(error) 
+        })
+      }
+    }
     
     // SCALABILITY: Use semantic search to retrieve only relevant products
     // This prevents sending entire catalog (e.g., 1000 products) to LLM
@@ -463,6 +562,31 @@ export async function POST(request: NextRequest) {
       contextMessage = `\n\nPAGE CONTEXT: The customer is browsing the home page/catalog.\n`
     } else if (pageContext === "product" && currentProduct) {
       contextMessage = `\n\nPAGE CONTEXT: The customer is viewing a specific product page.\n\nCURRENT PRODUCT:\nName: ${currentProduct.name}\nCategory: ${currentProduct.category}\nType: ${currentProduct.type}\nColor: ${currentProduct.color}\nPrice: $${currentProduct.price}\nDescription: ${currentProduct.description}\n`
+      
+      // Add detailed product page analysis if available
+      if (productPageAnalysis && isProductInquiry) {
+        contextMessage += `\n\nDETAILED PRODUCT ANALYSIS (from product page):\n`
+        if (productPageAnalysis.summary) {
+          contextMessage += `Summary: ${productPageAnalysis.summary}\n`
+        }
+        if (productPageAnalysis.enhancedDescription) {
+          contextMessage += `Enhanced Description: ${productPageAnalysis.enhancedDescription}\n`
+        }
+        if (productPageAnalysis.productDetails) {
+          contextMessage += `Product Details: ${productPageAnalysis.productDetails}\n`
+        }
+        if (productPageAnalysis.designElements) {
+          contextMessage += `Design Elements: ${productPageAnalysis.designElements}\n`
+        }
+        if (productPageAnalysis.materials) {
+          contextMessage += `Materials: ${productPageAnalysis.materials}\n`
+        }
+        if (productPageAnalysis.keyFeatures && productPageAnalysis.keyFeatures.length > 0) {
+          contextMessage += `Key Features: ${productPageAnalysis.keyFeatures.join(", ")}\n`
+        }
+        
+        contextMessage += `\nIMPORTANT: The customer is asking about this product. Use the detailed product analysis above to provide comprehensive information about the product. Be thorough, informative, and highlight key features, materials, design elements, and other relevant details from the product page analysis.`
+      }
     } else {
       contextMessage = `\n\nPAGE CONTEXT: The customer is browsing the Closelook store.\n`
     }

@@ -320,6 +320,19 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
         }
       }
 
+      // Get product URL for product page analysis
+      let productUrl: string | undefined = undefined
+      if (currentProduct && typeof window !== "undefined") {
+        // Prefer product.url if available
+        if (currentProduct.url && currentProduct.url.startsWith("http")) {
+          productUrl = currentProduct.url
+        } 
+        // Use current page URL if on product page
+        else if (pageContext === "product") {
+          productUrl = window.location.href
+        }
+      }
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -340,6 +353,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
                 id: currentProduct.id,
                 // Only send basic identifying info, backend will fetch full details
                 name: currentProduct.name,
+                url: productUrl, // Include product URL for page analysis
               }
             : undefined,
           // No longer sending allProducts - backend will fetch from Shopify
