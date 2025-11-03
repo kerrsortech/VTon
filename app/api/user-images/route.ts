@@ -1,6 +1,15 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { logger } from "@/lib/server-logger"
 import { getUserImages } from "@/lib/db/user-images"
+import { addCorsHeaders, createCorsPreflightResponse } from "@/lib/cors-headers"
+
+/**
+ * OPTIONS /api/user-images
+ * Handle CORS preflight requests
+ */
+export async function OPTIONS(request: NextRequest) {
+  return createCorsPreflightResponse(request)
+}
 
 /**
  * GET /api/user-images
@@ -32,13 +41,14 @@ export async function GET(request: NextRequest) {
 
     if (!userId && !shopifyCustomerId) {
       logger.warn("No user ID provided", { requestId })
-      return NextResponse.json(
+      const response = NextResponse.json(
         {
           error: "Missing user identification",
           details: "Please provide user ID or Shopify customer ID",
         },
         { status: 400 },
       )
+      return addCorsHeaders(response, request)
     }
 
     logger.debug("Fetching user images from database", { requestId, userId, shopifyCustomerId })
@@ -54,7 +64,7 @@ export async function GET(request: NextRequest) {
         hasHalfBody: !!userImages.halfBodyUrl,
       })
 
-      return NextResponse.json({
+      const response = NextResponse.json({
         success: true,
         images: userImages,
         userId: shopifyCustomerId || userId,
@@ -63,6 +73,7 @@ export async function GET(request: NextRequest) {
           requestId,
         },
       })
+      return addCorsHeaders(response, request)
     } catch (dbError) {
       logger.error("Database error while fetching user images", { 
         requestId, 
@@ -73,7 +84,7 @@ export async function GET(request: NextRequest) {
       // This allows the system to work without database (graceful degradation)
       if (dbError instanceof Error && dbError.message.includes("database connection")) {
         logger.warn("Database not configured, returning empty images", { requestId })
-        return NextResponse.json({
+        const response = NextResponse.json({
           success: true,
           images: {},
           userId: shopifyCustomerId || userId,
@@ -83,6 +94,7 @@ export async function GET(request: NextRequest) {
             warning: "Database not configured",
           },
         })
+        return addCorsHeaders(response, request)
       }
       
       throw dbError
@@ -93,7 +105,7 @@ export async function GET(request: NextRequest) {
       error: error instanceof Error ? error.message : String(error),
     })
     
-    return NextResponse.json(
+    const response = NextResponse.json(
       {
         error: "Failed to retrieve user images",
         details: error instanceof Error ? error.message : "An unexpected error occurred",
@@ -101,6 +113,7 @@ export async function GET(request: NextRequest) {
       },
       { status: 500 },
     )
+    return addCorsHeaders(response, request)
   }
 }
 
