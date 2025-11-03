@@ -40,6 +40,13 @@ export function init(config: WidgetConfig) {
         name: product.title || product.name || "",
         // Backend will fetch full product details from Shopify
         // Widget only sends ID and name for context
+        // Provide minimal required fields to satisfy Product type
+        category: "",
+        type: "",
+        color: "",
+        price: 0,
+        images: [],
+        description: "",
       }
     : undefined
 

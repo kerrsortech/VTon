@@ -19,8 +19,8 @@ const logger = {
   debug: (...args: any[]) => console.log("[DEBUG]", ...args),
 }
 
-// Import Link - webpack will alias to mock in widget context, works with Next.js in normal context
-import { Link as NextLink } from "next/link"
+// Import Link wrapper that works in both Next.js and widget contexts
+import { Link as NextLink } from "@/components/link-wrapper"
 
 interface Message {
   role: "user" | "assistant"

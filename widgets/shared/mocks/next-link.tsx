@@ -28,3 +28,6 @@ export function Link({ href, children, className, onClick }: LinkProps) {
   )
 }
 
+// Also export as default for compatibility
+export default Link
+
