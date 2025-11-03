@@ -1479,6 +1479,32 @@
       }
     }
     
+    // Method 1.5: Try additional Shopify product ID sources (MOST RELIABLE)
+    if (!product || !product.id) {
+      // Try ShopifyAnalytics meta (most reliable - always present on product pages)
+      if (window.ShopifyAnalytics && window.ShopifyAnalytics.meta && window.ShopifyAnalytics.meta.product) {
+        const analyticsProduct = window.ShopifyAnalytics.meta.product;
+        if (analyticsProduct.id || analyticsProduct.gid) {
+          product = product || {};
+          // Prefer numeric ID, fallback to GID, extract numeric from GID if needed
+          product.id = analyticsProduct.id || 
+                      (analyticsProduct.gid ? analyticsProduct.gid.split('/').pop() : '');
+          product.gid = analyticsProduct.gid; // Store Global ID for GraphQL queries
+          product.title = product.title || analyticsProduct.name;
+          product.type = product.type || analyticsProduct.type;
+          product.vendor = product.vendor || analyticsProduct.vendor;
+          console.log('✅ Product ID from ShopifyAnalytics:', product.id, product.gid);
+        }
+      }
+      
+      // Try window.meta.product (some themes use this)
+      if ((!product || !product.id) && window.meta && window.meta.product) {
+        product = product || {};
+        product.id = product.id || window.meta.product.id;
+        product.title = product.title || window.meta.product.title;
+      }
+    }
+    
     // Method 2: JSON-LD structured data
     if (!product) {
       const jsonLd = document.querySelector('script[type="application/ld+json"]');
