@@ -1,7 +1,7 @@
 import type React from "react"
 import type { Metadata } from "next"
 // import { Inter } from "next/font/google"  // Commented for build - will work on production
-import { Analytics } from "@vercel/analytics/next"
+// import { Analytics } from "@vercel/analytics/next"  // Disabled - not available on Render.com
 import { CloselookProvider } from "@/components/closelook-provider"
 import { Toaster } from "@/components/ui/toaster"
 import "./globals.css"
@@ -37,7 +37,7 @@ export default function RootLayout({
             <ChatbotWrapper />
           </CloselookProvider>
         </Suspense>
-        <Analytics />
+        {/* <Analytics /> - Disabled for Render.com deployment */}
       </body>
     </html>
   )
