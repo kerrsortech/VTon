@@ -1467,42 +1467,55 @@
     let product = null;
     let productImages = [];
 
-    // Method 1: window.Shopify.product (standard Shopify theme)
-    if (window.Shopify && window.Shopify.product) {
-      product = window.Shopify.product;
-      
-      // Get product images
-      if (product.images && Array.isArray(product.images)) {
-        productImages = product.images;
-      } else if (product.featured_image) {
-        productImages = [product.featured_image];
+    // Method 1: ShopifyAnalytics (MOST RELIABLE - always present on product pages)
+    if (window.ShopifyAnalytics && window.ShopifyAnalytics.meta && window.ShopifyAnalytics.meta.product) {
+      const analyticsProduct = window.ShopifyAnalytics.meta.product;
+      if (analyticsProduct.id || analyticsProduct.gid) {
+        product = {};
+        // Prefer numeric ID, fallback to GID, extract numeric from GID if needed
+        product.id = analyticsProduct.id || 
+                    (analyticsProduct.gid ? analyticsProduct.gid.split('/').pop() : '');
+        product.gid = analyticsProduct.gid; // Store Global ID for GraphQL queries
+        product.title = analyticsProduct.name || '';
+        product.type = analyticsProduct.type || '';
+        product.vendor = analyticsProduct.vendor || '';
+        console.log('✅ Product ID from ShopifyAnalytics:', product.id, product.gid);
       }
     }
     
-    // Method 1.5: Try additional Shopify product ID sources (MOST RELIABLE)
-    if (!product || !product.id) {
-      // Try ShopifyAnalytics meta (most reliable - always present on product pages)
-      if (window.ShopifyAnalytics && window.ShopifyAnalytics.meta && window.ShopifyAnalytics.meta.product) {
-        const analyticsProduct = window.ShopifyAnalytics.meta.product;
-        if (analyticsProduct.id || analyticsProduct.gid) {
-          product = product || {};
-          // Prefer numeric ID, fallback to GID, extract numeric from GID if needed
-          product.id = analyticsProduct.id || 
-                      (analyticsProduct.gid ? analyticsProduct.gid.split('/').pop() : '');
-          product.gid = analyticsProduct.gid; // Store Global ID for GraphQL queries
-          product.title = product.title || analyticsProduct.name;
-          product.type = product.type || analyticsProduct.type;
-          product.vendor = product.vendor || analyticsProduct.vendor;
-          console.log('✅ Product ID from ShopifyAnalytics:', product.id, product.gid);
-        }
+    // Method 2: window.Shopify.product (standard Shopify theme) - use for images and additional data
+    if (window.Shopify && window.Shopify.product) {
+      const shopifyProduct = window.Shopify.product;
+      
+      // Merge with ShopifyAnalytics data if available
+      if (!product) {
+        product = {};
       }
       
-      // Try window.meta.product (some themes use this)
-      if ((!product || !product.id) && window.meta && window.meta.product) {
-        product = product || {};
-        product.id = product.id || window.meta.product.id;
-        product.title = product.title || window.meta.product.title;
+      // Use Shopify.product for images (usually more reliable)
+      if (shopifyProduct.images && Array.isArray(shopifyProduct.images)) {
+        productImages = shopifyProduct.images;
+      } else if (shopifyProduct.featured_image) {
+        productImages = [shopifyProduct.featured_image];
       }
+      
+      // Fill in missing data from Shopify.product
+      if (!product.id && shopifyProduct.id) {
+        product.id = shopifyProduct.id.toString();
+      }
+      if (!product.title && shopifyProduct.title) {
+        product.title = shopifyProduct.title;
+      }
+      if (!product.type && shopifyProduct.type) {
+        product.type = shopifyProduct.type;
+      }
+    }
+    
+    // Method 3: Try window.meta.product (some themes use this)
+    if ((!product || !product.id) && window.meta && window.meta.product) {
+      product = product || {};
+      product.id = product.id || window.meta.product.id;
+      product.title = product.title || window.meta.product.title;
     }
     
     // Method 2: JSON-LD structured data
