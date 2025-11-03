@@ -97,6 +97,7 @@ Key Guidelines:
 - If you don't know something specific, acknowledge it and offer to help in other ways
 - When on the home page, proactively suggest products based on customer queries
 - When on a product page, focus on that product but also suggest complementary items
+- **CRITICAL CONTEXT RULE**: When the customer is on a product page (PAGE CONTEXT shows "product"), ANY mention of "this", "this product", "this item", "it", or ANY questions about the product (usage, features, durability, suitability, everyday use, daily use, materials, fit, sizing, care, styling, etc.), ALWAYS refers to the CURRENT PRODUCT shown on that page. NEVER ask "which product?" or "which item?" - always answer about the current product. The customer is viewing the product page, so all product-related questions are about that product.
 - If customer asks about orders but no order data is available, politely ask for their order number or email to help them
 
 Remember: Your goal is to be a trusted advisor who helps customers feel confident in their purchase decisions and provides comprehensive support for all their questions. Use the customer's name (if provided) to personalize your responses.`
@@ -158,13 +159,52 @@ function isAskingAboutCurrentProduct(message: string, hasCurrentProduct: boolean
     "details",
   ]
   
-  return currentProductKeywords.some((keyword) => lowerMessage.includes(keyword)) ||
-    // Also match if message is just asking about product in general on product page
-    (lowerMessage.length < 30 && (
-      lowerMessage.includes("this") ||
-      lowerMessage.includes("product") ||
-      lowerMessage.includes("item")
-    ))
+  // Product usage/inquiry patterns - phrases that contain "this" and product-related questions
+  const productInquiryPatterns = [
+    "can i use this",
+    "can you use this",
+    "is this good",
+    "is this suitable",
+    "is this durable",
+    "is this safe",
+    "is this comfortable",
+    "should i use this",
+    "can this be used",
+    "is this made for",
+    "is this designed for",
+    "is this recommended",
+    "is this appropriate",
+    "will this work",
+    "does this work",
+    "how to use this",
+    "how do i use this",
+    "when can i use this",
+    "where can i use this",
+  ]
+  
+  // Check for explicit product inquiry keywords
+  const hasExplicitKeywords = currentProductKeywords.some((keyword) => lowerMessage.includes(keyword))
+  
+  // Check for product usage/inquiry patterns with "this"
+  const hasInquiryPattern = productInquiryPatterns.some((pattern) => lowerMessage.includes(pattern))
+  
+  // Check if message contains "this" with product-related words (for short messages on product page)
+  const hasThisWithProductContext = lowerMessage.includes("this") && (
+    lowerMessage.includes("product") ||
+    lowerMessage.includes("item") ||
+    lowerMessage.includes("use") ||
+    lowerMessage.includes("wear") ||
+    lowerMessage.includes("good") ||
+    lowerMessage.includes("suitable") ||
+    lowerMessage.includes("durable") ||
+    lowerMessage.includes("everyday") ||
+    lowerMessage.includes("daily") ||
+    lowerMessage.includes("regular")
+  )
+  
+  return hasExplicitKeywords || hasInquiryPattern || hasThisWithProductContext ||
+    // Fallback: short messages with "this" on product page are likely about current product
+    (lowerMessage.length < 30 && lowerMessage.includes("this"))
 }
 
 export async function POST(request: NextRequest) {
@@ -254,8 +294,12 @@ export async function POST(request: NextRequest) {
                   images: closelookProduct.images,
                   description: closelookProduct.description,
                   sizes: closelookProduct.sizes,
+                  // Preserve URL from frontend if available (needed for product page analysis)
+                  url: currentProduct.url,
                 }
-                logger.info(`Fetched current product details from Shopify: ${currentProduct.id}`)
+                logger.info(`Fetched current product details from Shopify: ${currentProduct.id}`, {
+                  hasUrl: !!currentProduct.url
+                })
               }
             } catch (productError) {
               logger.warn("Error fetching current product from Shopify", { 
@@ -301,11 +345,20 @@ export async function POST(request: NextRequest) {
     // Use fetched products from backend, fallback to products from request (for demo/Next.js app)
     const allProductsToUse = fetchedProducts.length > 0 ? fetchedProducts : (allProducts || [])
     
-    // Detect if user is asking about current product and analyze product page if needed
-    const isProductInquiry = isAskingAboutCurrentProduct(message, !!currentProduct)
+    // Detect if user is asking about current product
+    // CRITICAL: On product pages, ALWAYS assume questions about "this" refer to current product
+    const isProductInquiry = pageContext === "product" && !!currentProduct ? 
+      (isAskingAboutCurrentProduct(message, true) || message.toLowerCase().includes("this")) : 
+      isAskingAboutCurrentProduct(message, !!currentProduct)
+    
     let productPageAnalysis = null
     
-    if (isProductInquiry && currentProduct) {
+    // Analyze product page if:
+    // 1. User is asking about current product (explicit inquiry), OR
+    // 2. User is on product page and message contains "this" (contextual inquiry)
+    const shouldAnalyzePage = (isProductInquiry || (pageContext === "product" && message.toLowerCase().includes("this"))) && currentProduct
+    
+    if (shouldAnalyzePage && currentProduct) {
       try {
         // Construct product URL
         let productUrl: string | undefined = undefined
@@ -560,11 +613,17 @@ export async function POST(request: NextRequest) {
 
     if (pageContext === "home") {
       contextMessage = `\n\nPAGE CONTEXT: The customer is browsing the home page/catalog.\n`
-    } else if (pageContext === "product" && currentProduct) {
-      contextMessage = `\n\nPAGE CONTEXT: The customer is viewing a specific product page.\n\nCURRENT PRODUCT:\nName: ${currentProduct.name}\nCategory: ${currentProduct.category}\nType: ${currentProduct.type}\nColor: ${currentProduct.color}\nPrice: $${currentProduct.price}\nDescription: ${currentProduct.description}\n`
+    } else if (pageContext === "product") {
+      // CRITICAL: Always provide product context when on product page, even if product data is minimal
+      if (currentProduct) {
+        contextMessage = `\n\nPAGE CONTEXT: The customer is viewing a specific product page.\n\nCRITICAL CONTEXT RULE: When the customer is on a product page, ANY mention of "this", "this product", "this item", "it", or questions about usage, features, durability, suitability, everyday use, daily use, etc., ALWAYS refers to the CURRENT PRODUCT shown on this page. NEVER ask which product they're referring to - always assume they mean the current product.\n\nCURRENT PRODUCT:\nName: ${currentProduct.name || "Product"}\n${currentProduct.category ? `Category: ${currentProduct.category}\n` : ""}${currentProduct.type ? `Type: ${currentProduct.type}\n` : ""}${currentProduct.color ? `Color: ${currentProduct.color}\n` : ""}${currentProduct.price ? `Price: $${currentProduct.price}\n` : ""}${currentProduct.description ? `Description: ${currentProduct.description}\n` : ""}`
+      } else {
+        // Even without product data, clarify context
+        contextMessage = `\n\nPAGE CONTEXT: The customer is viewing a specific product page.\n\nCRITICAL CONTEXT RULE: When the customer is on a product page, ANY mention of "this", "this product", "this item", "it", or questions about usage, features, durability, suitability, everyday use, daily use, etc., ALWAYS refers to the CURRENT PRODUCT shown on this page. NEVER ask which product they're referring to - always assume they mean the current product.\n`
+      }
       
-      // Add detailed product page analysis if available
-      if (productPageAnalysis && isProductInquiry) {
+      // Add detailed product page analysis if available (for any product inquiry)
+      if (productPageAnalysis && shouldAnalyzePage) {
         contextMessage += `\n\nDETAILED PRODUCT ANALYSIS (from product page):\n`
         if (productPageAnalysis.summary) {
           contextMessage += `Summary: ${productPageAnalysis.summary}\n`

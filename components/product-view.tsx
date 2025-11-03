@@ -221,7 +221,7 @@ export function ProductView({ product }: ProductViewProps) {
         </div>
       </div>
 
-      <GlobalChatbot />
+      <GlobalChatbot currentProduct={product} />
       <CloselookWidget product={product} onTryOnComplete={handleTryOnComplete} />
     </div>
   )

@@ -25590,6 +25590,18 @@ function GlobalChatbot({ currentProduct, className }) {
                     // This is fine - customer may not be logged in
                 }
             }
+            // Get product URL for product page analysis
+            let productUrl = undefined;
+            if (currentProduct && typeof window !== "undefined") {
+                // Prefer product.url if available
+                if (currentProduct.url && currentProduct.url.startsWith("http")) {
+                    productUrl = currentProduct.url;
+                }
+                // Use current page URL if on product page
+                else if (pageContext === "product") {
+                    productUrl = window.location.href;
+                }
+            }
             const response = await fetch("/api/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -25610,6 +25622,7 @@ function GlobalChatbot({ currentProduct, className }) {
                             id: currentProduct.id,
                             // Only send basic identifying info, backend will fetch full details
                             name: currentProduct.name,
+                            url: productUrl, // Include product URL for page analysis
                         }
                         : undefined,
                     // No longer sending allProducts - backend will fetch from Shopify
