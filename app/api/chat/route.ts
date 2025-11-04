@@ -19,6 +19,29 @@ import {
 } from "@/lib/shopify/api-client"
 import { createCustomerNote } from "@/lib/shopify/ticket-system"
 import { extractTicketRequest } from "@/lib/ticket-extractor"
+// New enhanced modules
+import { 
+  analyzeUserIntent, 
+  getSmartRecommendations,
+  filterProducts as filterProductsIntelligence,
+  rankProductsByRelevance
+} from "@/lib/productIntelligence"
+import {
+  extractTicketData,
+  createSupportTicket,
+  formatTicketResponse
+} from "@/lib/ticketSystem"
+import {
+  getSystemPrompt,
+  buildContextPrompt,
+  buildFullPrompt
+} from "@/lib/prompts"
+import {
+  convertToShopifyFormat,
+  convertFromShopifyFormat,
+  convertProductsToShopifyFormat,
+  convertProductsFromShopifyFormat
+} from "@/lib/product-format-converter"
 import { validateChatInput } from "@/lib/production-validation"
 import { addCorsHeaders, createCorsPreflightResponse, isAllowedOrigin } from "@/lib/cors-headers"
 import { ShopifyProductAdapter } from "@/lib/closelook-plugin/adapters/shopify-adapter"
@@ -40,8 +63,21 @@ if (!process.env.GOOGLE_GEMINI_API_KEY) {
   logger.warn("GOOGLE_GEMINI_API_KEY is not set. Chat functionality will be limited.")
 }
 
-// Build system prompt with customer name if available
+// Build system prompt with customer name if available (enhanced version with new prompt system)
 function buildSystemPrompt(customerName?: string): string {
+  // Use the new enhanced system prompt from prompts.js
+  const basePrompt = getSystemPrompt()
+  
+  // Add personalized greeting if customer name is available
+  if (customerName) {
+    return `Hello ${customerName}! I'm your personal shopping assistant.\n\n${basePrompt}`
+  }
+  
+  return basePrompt
+}
+
+// Legacy system prompt (kept for reference but not used)
+function buildSystemPromptLegacy(customerName?: string): string {
   const greeting = customerName 
     ? `Hello ${customerName}! I'm your personal shopping assistant.`
     : "Hello! I'm your personal shopping assistant."
@@ -804,16 +840,46 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Enhanced intent analysis using new productIntelligence module
+    // This provides better intent detection with ticket creation support
+    let enhancedIntent = null
+    try {
+      // Convert current product to Shopify format for intent analysis
+      const shopifyCurrentProduct = finalCurrentProduct ? convertToShopifyFormat(finalCurrentProduct) : null
+      enhancedIntent = analyzeUserIntent(message, shopifyCurrentProduct, conversationHistory || [])
+      logger.info('[Chat API] Enhanced intent detected:', {
+        type: enhancedIntent.type,
+        wantsRecommendations: enhancedIntent.wantsRecommendations,
+        wantsTicket: enhancedIntent.wantsTicket,
+        ticketStage: enhancedIntent.ticketStage,
+        filters: enhancedIntent.filters
+      })
+    } catch (error) {
+      logger.warn('[Chat API] Enhanced intent analysis failed, using fallback', { error: error instanceof Error ? error.message : String(error) })
+    }
+
     // Always filter products when:
     // 1. User is asking for recommendations/search (needsProductFiltering), OR
     // 2. Catalog is large (isLargeCatalog)
     // This ensures we only send relevant products to Gemini, making responses content-aware
-    if (needsProductFiltering || isLargeCatalog) {
+    if (needsProductFiltering || isLargeCatalog || enhancedIntent?.wantsRecommendations) {
       try {
         const apiKey = process.env.GOOGLE_GEMINI_API_KEY || ""
         
         // Extract query intent first (helps determine how many products to retrieve)
-        if (apiKey) {
+                 // Use enhanced intent if available, otherwise fallback to semantic search
+         if (enhancedIntent && enhancedIntent.wantsRecommendations) {
+           // Use enhanced intent for recommendations
+           // Create a compatible QueryIntent object
+           queryIntent = {
+             intent: enhancedIntent.type === 'price_filter' ? 'search' : 'recommendation',
+             confidence: 0.8,
+             isPriceQuery: !!enhancedIntent.filters.maxPrice,
+             isCategoryQuery: !!enhancedIntent.filters.category,
+             isSizeQuery: false, // Enhanced intent doesn't have size filter yet
+             filters: enhancedIntent.filters
+           } as unknown as QueryIntent
+        } else if (apiKey) {
           queryIntent = await extractQueryIntent(message, apiKey).catch((error) => {
             logger.warn("Intent extraction failed, using fallback", { error: error instanceof Error ? error.message : String(error) })
             return null
@@ -826,8 +892,39 @@ export async function POST(request: NextRequest) {
           ? getProductLimitForQuery(queryIntent, catalogSize)
           : (needsProductFiltering ? 20 : 50) // Default: 20 for filtered queries, 50 for large catalogs
 
-        // Use filtered products if available, otherwise use semantic search
-        if (filteredProducts.length > 0) {
+        // Use enhanced smart recommendations if available, otherwise fallback to existing methods
+        if (enhancedIntent && enhancedIntent.wantsRecommendations && finalCurrentProduct) {
+          try {
+                                                   // Convert products to Shopify format for smart recommendations
+              const productsArray: Product[] = Array.isArray(allProductsToUse) ? [...allProductsToUse] : []
+              const shopifyProducts = convertProductsToShopifyFormat(productsArray)
+              const shopifyCurrentProduct = convertToShopifyFormat(finalCurrentProduct)
+            
+            // Use new smart recommendations with complementary product pairs
+            const smartRecs = await getSmartRecommendations(
+              shopifyProducts,
+              shopifyCurrentProduct,
+              enhancedIntent
+            )
+            
+            // Convert back to Product format
+            relevantProducts = convertProductsFromShopifyFormat(smartRecs)
+            logger.info('[Chat API] Using enhanced smart recommendations:', { count: relevantProducts.length })
+          } catch (error) {
+            logger.warn('[Chat API] Smart recommendations failed, using fallback', { error: error instanceof Error ? error.message : String(error) })
+            // Fallback to filtered products or semantic search
+            if (filteredProducts.length > 0) {
+              relevantProducts = filteredProducts.slice(0, productLimit)
+              logger.info('[Chat API] Using filtered products for recommendations')
+            } else {
+              relevantProducts = await retrieveRelevantProducts(allProductsToUse as Product[], message, {
+                maxProducts: productLimit,
+                useGeminiIntent: !!apiKey,
+                apiKey: apiKey,
+              })
+            }
+          }
+        } else if (filteredProducts.length > 0) {
           relevantProducts = filteredProducts.slice(0, productLimit)
           logger.info('[Chat API] Using filtered products for recommendations')
         } else {
@@ -1033,8 +1130,59 @@ export async function POST(request: NextRequest) {
       cart: context?.cart || null,
     }
     
-    // Use buildContextString to create natural language context
-    contextMessage = buildContextString(enrichedContext)
+    // Use enhanced context building from prompts.js
+    // Build context in the format expected by buildContextPrompt
+    const promptContext = {
+      pageType: pageType,
+      currentProduct: finalCurrentProduct ? {
+        title: finalCurrentProduct.name,
+        name: finalCurrentProduct.name,
+        price: typeof finalCurrentProduct.price === 'number' 
+          ? { min: finalCurrentProduct.price, currency: 'USD' }
+          : finalCurrentProduct.price,
+        description: finalCurrentProduct.description,
+        productType: finalCurrentProduct.type || finalCurrentProduct.category,
+        type: finalCurrentProduct.type,
+        category: finalCurrentProduct.category,
+        vendor: undefined,
+        available: true,
+        tags: [],
+        variants: finalCurrentProduct.sizes?.map(size => ({
+          title: size,
+          available: true
+        })) || [],
+        images: finalCurrentProduct.images || []
+      } : undefined,
+      recommendedProducts: relevantProducts.slice(0, 10).map(p => ({
+        id: p.id,
+        title: p.name,
+        name: p.name,
+        price: typeof p.price === 'number' 
+          ? { min: p.price, currency: 'USD' }
+          : p.price,
+        productType: p.type || p.category,
+        type: p.type,
+        category: p.category,
+        tags: [],
+        available: true,
+        images: p.images || []
+      })),
+      customer: customerInternal ? {
+        logged_in: !!customerInternal.id,
+        id: customerInternal.id
+      } : undefined,
+      cart: context?.cart || null
+    }
+
+    // Try new enhanced context building, fallback to old method
+    try {
+      contextMessage = buildContextPrompt(promptContext, message)
+      logger.info('[Chat API] Using enhanced context prompt')
+    } catch (error) {
+      logger.warn('[Chat API] Enhanced context building failed, using fallback', { error: error instanceof Error ? error.message : String(error) })
+      // Fallback to original buildContextString
+      contextMessage = buildContextString(enrichedContext)
+    }
     
     // Add additional context for Gemini
     if (pageType === "home") {
@@ -1491,7 +1639,57 @@ export async function POST(request: NextRequest) {
     const conversationLength = (conversationHistory || []).length
     const shouldCheckForTicket = conversationLength >= 2 // After a few exchanges
     
-    if (shouldCheckForTicket && shop) {
+    // NEW: Check for ticket creation markers in AI response (from enhanced prompt system)
+    if (text) {
+      const ticketData = extractTicketData(text)
+      if (ticketData) {
+        try {
+          const ticketId = await createSupportTicket(
+            ticketData,
+            {
+              session_id: sessionId,
+              shop_domain: shop || '',
+              customer_id: customerInternal?.id || 'guest'
+            }
+          )
+          
+          // Format response with ticket ID
+          text = formatTicketResponse(text, ticketId)
+          ticketCreated = true
+          ticketMessage = `✅ Support ticket created! Reference #${ticketId}. Our team will contact you within 24 hours.`
+          logger.info('[Chat API] Ticket created via enhanced system:', { ticketId })
+        } catch (error) {
+          logger.error('[Chat API] Failed to create ticket via enhanced system', { error: error instanceof Error ? error.message : String(error) })
+          // Continue with fallback ticket creation
+        }
+      }
+    }
+    
+    // Enhanced intent can also trigger ticket creation flow
+    if (!ticketCreated && enhancedIntent && enhancedIntent.wantsTicket && enhancedIntent.ticketStage === 'create') {
+      try {
+        const ticketData = {
+          issue: message,
+          context: finalCurrentProduct ? `Product: ${finalCurrentProduct.name}` : undefined
+        }
+        const ticketId = await createSupportTicket(
+          ticketData,
+          {
+            session_id: sessionId,
+            shop_domain: shop || '',
+            customer_id: customerInternal?.id || 'guest'
+          }
+        )
+        ticketCreated = true
+        ticketMessage = `✅ Support ticket created! Reference #${ticketId}. Our team will contact you within 24 hours.`
+        logger.info('[Chat API] Ticket created via intent analysis:', { ticketId })
+      } catch (error) {
+        logger.error('[Chat API] Failed to create ticket via intent', { error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    
+    // FALLBACK: Use existing ticket creation system
+    if (!ticketCreated && shouldCheckForTicket && shop) {
       // Check user message first (most direct)
       let ticketRequest = extractTicketRequest(message, customerName)
       
