@@ -25,6 +25,8 @@ import { ShopifyProductAdapter } from "@/lib/closelook-plugin/adapters/shopify-a
 import type { CloselookProduct } from "@/lib/closelook-plugin/types"
 import { analyzeProductPage } from "@/lib/product-page-analyzer"
 import { ensureStorefrontToken } from "@/lib/shopify/storefront-token"
+import { setContext, getContext, setConversationHistory, getConversationHistory } from "@/lib/redis"
+import { buildContextString } from "@/lib/context"
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "")
 
@@ -293,6 +295,38 @@ export async function POST(request: NextRequest) {
       return addCorsHeaders(response, request)
     }
 
+    // Get session ID from request (from new context-aware widget)
+    const sessionId = requestBody.session_id || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    
+    // Get context from request (new context-aware widget sends this)
+    let context = requestBody.context || null
+    
+    // Store context in Redis if provided
+    if (context && sessionId) {
+      try {
+        await setContext(sessionId, context)
+        logger.info('[Chat API] Context stored in Redis', { 
+          sessionId, 
+          pageType: context.page_type,
+          hasProduct: !!context.current_product
+        })
+      } catch (error) {
+        logger.warn('[Chat API] Failed to store context in Redis', { error })
+      }
+    }
+    
+    // Also try to get context from Redis if not provided in request
+    if (!context && sessionId) {
+      try {
+        context = await getContext(sessionId)
+        if (context) {
+          logger.info('[Chat API] Context loaded from Redis', { sessionId })
+        }
+      } catch (error) {
+        logger.warn('[Chat API] Failed to load context from Redis', { error })
+      }
+    }
+
     // Detect query type (order, policy, account, etc.)
     // Only fetch data when explicitly asked
     const queryType = detectQueryType(message)
@@ -302,47 +336,85 @@ export async function POST(request: NextRequest) {
     const shouldFetchPolicies = queryType.isPolicy
 
     // BACKEND LOGIC: Fetch products and current product from Shopify if shop domain is provided
+    // Use context from widget if available, otherwise use validated input
     // Widget should only send shop domain and product ID, backend handles all fetching and mapping
-    let fetchedProducts: Product[] = []
-    let fetchedCurrentProduct: Product | undefined = currentProduct
+    // Use shop from context if available, otherwise use validated input
+    const shopDomain = context?.shop_domain || shop || requestBody.shop_domain
+    const pageType = context?.page_type || pageContext || 'other'
+    let productId = context?.current_product?.id || context?.current_product?.gid || currentProduct?.id
     
-    if (shop) {
+    let fetchedProducts: Product[] = []
+    let fetchedCurrentProduct: Product | undefined = currentProduct || (context?.current_product ? {
+      id: context.current_product.id || context.current_product.gid,
+      name: context.current_product.title || context.current_product.name,
+      handle: context.current_product.handle
+    } : undefined)
+    
+    if (shopDomain) {
       try {
         // Ensure we have a Storefront Access Token
         // This will check env, session, or create one if needed
-        const storefrontToken = await ensureStorefrontToken(shop)
+        const storefrontToken = await ensureStorefrontToken(shopDomain)
         
         if (storefrontToken) {
-          const adapter = new ShopifyProductAdapter(shop, storefrontToken)
+          const adapter = new ShopifyProductAdapter(shopDomain, storefrontToken)
           
           // CRITICAL: ALWAYS fetch complete product details from Shopify when product ID is provided
           // This is the PRIMARY pipeline - widget may send minimal data, but backend always fetches full details
           // This ensures Gemini receives complete, accurate product information
-          if (currentProduct && currentProduct.id) {
+          // Try product ID from context first, then fallback to currentProduct
+          if (productId || (context?.current_product?.handle && !productId)) {
             try {
               // Widget only sends ID, backend fetches full details from Shopify
               // Convert numeric ID to GID format if needed (Shopify GraphQL accepts both)
-              let productId = currentProduct.id.toString().trim()
-              // If ID is numeric (not already in GID format), convert to GID
-              if (productId && !productId.startsWith('gid://')) {
-                // Remove any existing gid:// prefix and extract numeric part
-                const numericId = productId.replace(/^gid:\/\/shopify\/Product\//, '').replace(/[^0-9]/g, '')
-                if (numericId) {
-                  productId = `gid://shopify/Product/${numericId}`
-                } else {
-                  // If we can't extract numeric ID, try using the ID as-is
-                  logger.warn("Could not extract numeric ID, using as-is", { originalId: currentProduct.id })
+              // Try handle first if available, otherwise use ID
+              let productIdToFetch = productId?.toString().trim() || currentProduct?.id?.toString().trim()
+              
+              // If we have handle but no ID, try fetching by handle
+              if (!productIdToFetch && context?.current_product?.handle) {
+                try {
+                  const productByHandle = await adapter.getProductByHandle(context.current_product.handle)
+                  if (productByHandle) {
+                    fetchedCurrentProduct = {
+                      id: productByHandle.id,
+                      name: productByHandle.name,
+                      category: productByHandle.category || '',
+                      type: productByHandle.type || '',
+                      color: productByHandle.color || '',
+                      price: productByHandle.price || 0,
+                      images: productByHandle.images || [],
+                      description: productByHandle.description || '',
+                      sizes: productByHandle.sizes || [],
+                    }
+                    logger.info('✅ Product fetched by handle from Shopify')
+                    // Skip the ID-based fetch below
+                    productIdToFetch = null
+                  }
+                } catch (handleError) {
+                  logger.warn('Failed to fetch product by handle', { error: handleError })
                 }
               }
               
-              logger.info(`Fetching complete product details from Shopify`, {
-                originalId: currentProduct.id,
-                convertedId: productId,
-                shop,
-                hasStorefrontToken: !!storefrontToken
-              })
-              
-              const closelookProduct = await adapter.getProduct(productId)
+              if (productIdToFetch) {
+                // If ID is numeric (not already in GID format), convert to GID
+                if (productIdToFetch && !productIdToFetch.startsWith('gid://')) {
+                  // Remove any existing gid:// prefix and extract numeric part
+                  const numericId = productIdToFetch.replace(/^gid:\/\/shopify\/Product\//, '').replace(/[^0-9]/g, '')
+                  if (numericId) {
+                    productIdToFetch = `gid://shopify/Product/${numericId}`
+                  } else {
+                    // If we can't extract numeric ID, try using the ID as-is
+                    logger.warn("Could not extract numeric ID, using as-is", { originalId: productIdToFetch })
+                  }
+                }
+                
+                logger.info(`Fetching complete product details from Shopify`, {
+                  originalId: productIdToFetch,
+                  shopDomain,
+                  hasStorefrontToken: !!storefrontToken
+                })
+                
+                const closelookProduct = await adapter.getProduct(productIdToFetch)
               if (closelookProduct) {
                 fetchedCurrentProduct = {
                   id: closelookProduct.id,
@@ -359,29 +431,29 @@ export async function POST(request: NextRequest) {
                   // Preserve URL from frontend if available (needed for fallback URL analysis)
                   url: currentProduct.url || closelookProduct.url || undefined,
                 }
-                logger.info(`✅ Successfully fetched complete product details from Shopify`, {
-                  productId: closelookProduct.id,
-                  productName: closelookProduct.name,
-                  hasDescription: !!closelookProduct.description,
-                  descriptionLength: closelookProduct.description?.length || 0,
-                  imageCount: closelookProduct.images?.length || 0,
-                  hasSizes: !!closelookProduct.sizes && closelookProduct.sizes.length > 0,
-                  category: closelookProduct.category,
-                  type: closelookProduct.type,
-                  price: closelookProduct.price
-                })
-              } else {
-                logger.warn("Product not found in Shopify, using widget data", { 
-                  originalId: currentProduct.id,
-                  convertedId: productId,
-                  shop,
-                  widgetProductName: currentProduct.name
-                })
-                // Keep widget data but ensure we have at least a name
-                if (!currentProduct.name && currentProduct.id) {
-                  fetchedCurrentProduct = {
-                    ...currentProduct,
-                    name: `Product ${currentProduct.id}`,
+                  logger.info(`✅ Successfully fetched complete product details from Shopify`, {
+                    productId: closelookProduct.id,
+                    productName: closelookProduct.name,
+                    hasDescription: !!closelookProduct.description,
+                    descriptionLength: closelookProduct.description?.length || 0,
+                    imageCount: closelookProduct.images?.length || 0,
+                    hasSizes: !!closelookProduct.sizes && closelookProduct.sizes.length > 0,
+                    category: closelookProduct.category,
+                    type: closelookProduct.type,
+                    price: closelookProduct.price
+                  })
+                } else {
+                  logger.warn("Product not found in Shopify, using widget data", { 
+                    originalId: productIdToFetch,
+                    shopDomain,
+                    widgetProductName: fetchedCurrentProduct?.name
+                  })
+                  // Keep widget data but ensure we have at least a name
+                  if (fetchedCurrentProduct && !fetchedCurrentProduct.name && fetchedCurrentProduct.id) {
+                    fetchedCurrentProduct = {
+                      ...fetchedCurrentProduct,
+                      name: `Product ${fetchedCurrentProduct.id}`,
+                    }
                   }
                 }
               }
@@ -389,23 +461,23 @@ export async function POST(request: NextRequest) {
               logger.error("Error fetching current product from Shopify", { 
                 error: productError instanceof Error ? productError.message : String(productError),
                 errorStack: productError instanceof Error ? productError.stack : undefined,
-                originalId: currentProduct.id,
-                shop
+                originalId: productId,
+                shopDomain
               })
               // Keep the minimal product data from widget as fallback
               // Ensure we have at least a name
-              if (currentProduct && !currentProduct.name && currentProduct.id) {
+              if (fetchedCurrentProduct && !fetchedCurrentProduct.name && fetchedCurrentProduct.id) {
                 fetchedCurrentProduct = {
-                  ...currentProduct,
-                  name: `Product ${currentProduct.id}`,
+                  ...fetchedCurrentProduct,
+                  name: `Product ${fetchedCurrentProduct.id}`,
                 }
               }
             }
-          } else if (currentProduct && !currentProduct.id) {
+          } else if (fetchedCurrentProduct && !fetchedCurrentProduct.id) {
             logger.warn("Current product exists but has no ID", {
-              hasName: !!currentProduct.name,
-              hasCategory: !!currentProduct.category,
-              shop
+              hasName: !!fetchedCurrentProduct.name,
+              hasCategory: !!fetchedCurrentProduct.category,
+              shopDomain
             })
           }
           
@@ -425,33 +497,57 @@ export async function POST(request: NextRequest) {
             sizes: cp.sizes,
           }))
           
-          logger.info(`Fetched ${fetchedProducts.length} products from Shopify for shop ${shop}`)
+          logger.info(`Fetched ${fetchedProducts.length} products from Shopify for shop ${shopDomain}`)
         } else {
-          logger.warn(`No storefront token available for shop ${shop}, using products from request if provided`)
+          logger.warn(`No storefront token available for shop ${shopDomain}, using products from request if provided`)
         }
       } catch (error) {
         logger.error("Error fetching products from Shopify", { 
           error: error instanceof Error ? error.message : String(error),
-          shop 
+          shopDomain 
         })
         // Fallback to products from request if available
       }
     }
     
     // Use fetched current product or fallback to provided one
-    currentProduct = fetchedCurrentProduct || currentProduct
+    const finalCurrentProduct = fetchedCurrentProduct || currentProduct
+    
+    // Update context with enriched product data
+    if (context && finalCurrentProduct) {
+      context.current_product = {
+        ...context.current_product,
+        id: finalCurrentProduct.id,
+        name: finalCurrentProduct.name,
+        title: finalCurrentProduct.name,
+        price: finalCurrentProduct.price,
+        description: finalCurrentProduct.description,
+        category: finalCurrentProduct.category,
+        type: finalCurrentProduct.type,
+        images: finalCurrentProduct.images,
+        sizes: finalCurrentProduct.sizes,
+      }
+      // Store updated context back to Redis
+      if (sessionId) {
+        try {
+          await setContext(sessionId, context)
+        } catch (error) {
+          logger.warn('Failed to update context in Redis', { error })
+        }
+      }
+    }
     
     // Log final product state for debugging
-    if (pageContext === "product") {
+    if (pageType === "product") {
       logger.info(`Final product state for context`, {
-        hasProduct: !!currentProduct,
-        productId: currentProduct?.id,
-        productName: currentProduct?.name,
-        hasDescription: !!currentProduct?.description,
-        descriptionLength: currentProduct?.description?.length || 0,
-        hasName: !!currentProduct?.name,
+        hasProduct: !!finalCurrentProduct,
+        productId: finalCurrentProduct?.id,
+        productName: finalCurrentProduct?.name,
+        hasDescription: !!finalCurrentProduct?.description,
+        descriptionLength: finalCurrentProduct?.description?.length || 0,
+        hasName: !!finalCurrentProduct?.name,
         wasFetched: !!fetchedCurrentProduct,
-        shop
+        shopDomain
       })
     }
     
@@ -460,26 +556,26 @@ export async function POST(request: NextRequest) {
     
     // Detect if user is asking about current product
     // CRITICAL: On product pages, ALWAYS assume questions about "this" refer to current product
-    const isProductInquiry = pageContext === "product" && !!currentProduct ? 
+    const isProductInquiry = pageType === "product" && !!finalCurrentProduct ? 
       (isAskingAboutCurrentProduct(message, true) || message.toLowerCase().includes("this")) : 
-      isAskingAboutCurrentProduct(message, !!currentProduct)
+      isAskingAboutCurrentProduct(message, !!finalCurrentProduct)
     
     // Get product URL for direct Gemini analysis
-        let productUrl: string | undefined = undefined
-    if (currentProduct?.url && typeof currentProduct.url === "string" && currentProduct.url.startsWith("http")) {
-          productUrl = currentProduct.url
-    } else if (pageContext === "product" && currentProduct?.id && shop) {
+    let productUrl: string | undefined = undefined
+    if (finalCurrentProduct?.url && typeof finalCurrentProduct.url === "string" && finalCurrentProduct.url.startsWith("http")) {
+      productUrl = finalCurrentProduct.url
+    } else if (pageType === "product" && finalCurrentProduct?.id && shopDomain) {
       // Fallback: construct URL from shop domain
-          const shopDomain = shop.replace(/\.myshopify\.com$/, '')
-          productUrl = `https://${shopDomain}.myshopify.com/products/${currentProduct.id}`
-        }
+      const shopName = shopDomain.replace(/\.myshopify\.com$/, '').replace(/^https?:\/\//, '')
+      productUrl = `https://${shopName}.myshopify.com/products/${finalCurrentProduct.id}`
+    }
     
     let productPageAnalysis = null
         
     // Analyze product page if:
     // 1. User is asking about current product (explicit inquiry), OR
     // 2. User is on product page and message contains "this" (contextual inquiry)
-    const shouldAnalyzePage = (isProductInquiry || (pageContext === "product" && message.toLowerCase().includes("this"))) && currentProduct
+    const shouldAnalyzePage = (isProductInquiry || (pageType === "product" && message.toLowerCase().includes("this"))) && finalCurrentProduct
     
     // For product inquiries, we'll send URL directly to Gemini for analysis
     // This is simpler and more reliable than pre-fetching content
@@ -562,11 +658,17 @@ export async function POST(request: NextRequest) {
     // Fetch orders only if query is about orders/account and we have customer info or order number
     // NOTE: shop domain should come from Shopify context (window.Shopify.shop) which is always myshopify.com
     // Even when customer is browsing on custom domain, Shopify context provides the myshopify.com domain
-    if (shop && shouldFetchOrders) {
+    // Use shopDomain from context if available, otherwise use shop
+    const shopForOrders = shopDomain || shop
+    if (shopForOrders && shouldFetchOrders) {
       try {
         // Get Shopify session for Admin API
         // Session key is myshopify.com domain (from OAuth)
-        const session = await getSession(shop)
+        // Normalize shop domain to myshopify.com format for session lookup
+        const normalizedShop = shopForOrders.includes('.myshopify.com') 
+          ? shopForOrders 
+          : shopForOrders.replace(/^https?:\/\//, '').replace(/\/$/, '')
+        const session = await getSession(normalizedShop)
         
         if (session && session.accessToken) {
             // Option 1: Fetch specific order by order number (from query)
@@ -655,9 +757,12 @@ export async function POST(request: NextRequest) {
 
     // Fetch policies only if query is about policies
     // NOTE: shop domain comes from Shopify context (always myshopify.com format)
-    if (shop && shouldFetchPolicies) {
+    if (shopForOrders && shouldFetchPolicies) {
       try {
-        const session = await getSession(shop)
+        const normalizedShop = shopForOrders.includes('.myshopify.com') 
+          ? shopForOrders 
+          : shopForOrders.replace(/^https?:\/\//, '').replace(/\/$/, '')
+        const session = await getSession(normalizedShop)
         
         if (session && session.accessToken) {
           try {
@@ -680,105 +785,138 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Build context string using the new context service
+    // This uses the context from Redis/widget and enriches it with product data
     let contextMessage = ""
-
-    if (pageContext === "home") {
-      contextMessage = `\n\nPAGE CONTEXT: The customer is browsing the home page/catalog.\n`
-    } else if (pageContext === "product") {
+    
+    // Build enriched context object
+    const enrichedContext = {
+      ...context,
+      page_type: pageType,
+      current_product: finalCurrentProduct ? {
+        id: finalCurrentProduct.id,
+        name: finalCurrentProduct.name,
+        title: finalCurrentProduct.name,
+        price: finalCurrentProduct.price,
+        description: finalCurrentProduct.description,
+        category: finalCurrentProduct.category,
+        type: finalCurrentProduct.type,
+        images: finalCurrentProduct.images,
+        sizes: finalCurrentProduct.sizes,
+        vendor: finalCurrentProduct.vendor,
+        productType: finalCurrentProduct.type,
+        available: true, // Assume available if fetched from Shopify
+      } : context?.current_product,
+      shop_domain: shopDomain || context?.shop_domain,
+      customer: context?.customer || (customerInternal ? {
+        id: customerInternal.id,
+        logged_in: !!customerInternal.id
+      } : null),
+      cart: context?.cart || null,
+    }
+    
+    // Use buildContextString to create natural language context
+    contextMessage = buildContextString(enrichedContext)
+    
+    // Add additional context for Gemini
+    if (pageType === "home") {
+      contextMessage = `\n\nPAGE CONTEXT: The customer is browsing the home page/catalog.\n` + contextMessage
+    } else if (pageType === "product") {
       // PRIMARY PIPELINE: Send complete product details fetched from Shopify to Gemini
       // This is the main way to provide product information - fetched directly from Shopify API
-      if (currentProduct && (currentProduct.id || currentProduct.name)) {
+      if (finalCurrentProduct && (finalCurrentProduct.id || finalCurrentProduct.name)) {
         // Build comprehensive product details message
         // ALWAYS include product context even if some fields are missing
         let productDetails = `\n\n═══════════════════════════════════════════════════════════\n`
         productDetails += `🎯 PRODUCT THE CUSTOMER IS VIEWING (Fetched from Shopify API):\n`
         productDetails += `═══════════════════════════════════════════════════════════\n\n`
         
-        productDetails += `PRODUCT ID: ${currentProduct.id || "N/A"}\n`
-        productDetails += `PRODUCT NAME: ${currentProduct.name || "N/A"}\n\n`
+        productDetails += `PRODUCT ID: ${finalCurrentProduct.id || "N/A"}\n`
+        productDetails += `PRODUCT NAME: ${finalCurrentProduct.name || "N/A"}\n\n`
         
-        if (currentProduct.description) {
-          productDetails += `DESCRIPTION:\n${currentProduct.description}\n\n`
+        if (finalCurrentProduct.description) {
+          productDetails += `DESCRIPTION:\n${finalCurrentProduct.description}\n\n`
         } else {
           productDetails += `DESCRIPTION: Not available (product may be new or details still loading)\n\n`
         }
         
-        if (currentProduct.category) {
-          productDetails += `CATEGORY: ${currentProduct.category}\n`
+        if (finalCurrentProduct.category) {
+          productDetails += `CATEGORY: ${finalCurrentProduct.category}\n`
         }
-        if (currentProduct.type) {
-          productDetails += `TYPE: ${currentProduct.type}\n`
+        if (finalCurrentProduct.type) {
+          productDetails += `TYPE: ${finalCurrentProduct.type}\n`
         }
-        if (currentProduct.color) {
-          productDetails += `COLOR: ${currentProduct.color}\n`
+        if (finalCurrentProduct.color) {
+          productDetails += `COLOR: ${finalCurrentProduct.color}\n`
         }
-        if (currentProduct.price) {
-          productDetails += `PRICE: $${currentProduct.price}\n`
+        if (finalCurrentProduct.price) {
+          productDetails += `PRICE: $${finalCurrentProduct.price}\n`
         }
-        if (currentProduct.sizes && currentProduct.sizes.length > 0) {
-          productDetails += `AVAILABLE SIZES: ${currentProduct.sizes.join(", ")}\n`
+        if (finalCurrentProduct.sizes && finalCurrentProduct.sizes.length > 0) {
+          productDetails += `AVAILABLE SIZES: ${finalCurrentProduct.sizes.join(", ")}\n`
         }
-        if (currentProduct.images && currentProduct.images.length > 0) {
-          productDetails += `IMAGES: ${currentProduct.images.length} image(s) available\n`
+        if (finalCurrentProduct.images && finalCurrentProduct.images.length > 0) {
+          productDetails += `IMAGES: ${finalCurrentProduct.images.length} image(s) available\n`
           // Include first image URL for context
-          if (currentProduct.images[0]) {
-            productDetails += `PRIMARY IMAGE URL: ${currentProduct.images[0]}\n`
+          if (finalCurrentProduct.images[0]) {
+            productDetails += `PRIMARY IMAGE URL: ${finalCurrentProduct.images[0]}\n`
           }
         }
         
         productDetails += `\n═══════════════════════════════════════════════════════════\n`
         productDetails += `⚠️ CRITICAL INSTRUCTIONS - YOU MUST FOLLOW THESE:\n`
         productDetails += `═══════════════════════════════════════════════════════════\n\n`
-        productDetails += `1. The customer is viewing THIS SPECIFIC PRODUCT (${currentProduct.name || "Product ID: " + currentProduct.id}) on the product page.\n`
+        productDetails += `1. The customer is viewing THIS SPECIFIC PRODUCT (${finalCurrentProduct.name || "Product ID: " + finalCurrentProduct.id}) on the product page.\n`
         productDetails += `2. When the customer says "this", "this product", "this item", "it", or asks questions like "Tell me more about this product", they are ALWAYS referring to THE PRODUCT DETAILS SHOWN ABOVE.\n`
         productDetails += `3. You MUST use the product information above to answer their questions. DO NOT ask "which product?" or say you're having trouble accessing product details.\n`
         productDetails += `4. If the description is missing, use the product name, category, type, color, price, and other available details to provide information.\n`
         productDetails += `5. If the customer asks "Tell me more about this product", provide comprehensive information based on what you know:\n`
-        productDetails += `   - Product name: ${currentProduct.name || "N/A"}\n`
-        productDetails += `   - Category: ${currentProduct.category || "N/A"}\n`
-        productDetails += `   - Type: ${currentProduct.type || "N/A"}\n`
-        productDetails += `   - Price: $${currentProduct.price || "N/A"}\n`
-        productDetails += `   - Description: ${currentProduct.description ? "Available above" : "Use category and type to provide general information"}\n`
+        productDetails += `   - Product name: ${finalCurrentProduct.name || "N/A"}\n`
+        productDetails += `   - Category: ${finalCurrentProduct.category || "N/A"}\n`
+        productDetails += `   - Type: ${finalCurrentProduct.type || "N/A"}\n`
+        productDetails += `   - Price: $${finalCurrentProduct.price || "N/A"}\n`
+        productDetails += `   - Description: ${finalCurrentProduct.description ? "Available above" : "Use category and type to provide general information"}\n`
         productDetails += `6. Be comprehensive and informative - use ALL the product information available above.\n`
         productDetails += `7. DO NOT say you're having trouble accessing product details - you have the product information above.\n\n`
         
-        contextMessage = productDetails
+        // Combine with context string from buildContextString
+        contextMessage = productDetails + '\n\n' + contextMessage
         
         // Log what we're sending to Gemini
         logger.info(`Product context message for Gemini`, {
-          hasId: !!currentProduct.id,
-          hasName: !!currentProduct.name,
-          hasDescription: !!currentProduct.description,
-          descriptionLength: currentProduct.description?.length || 0,
-          hasCategory: !!currentProduct.category,
-          hasType: !!currentProduct.type,
-          hasPrice: !!currentProduct.price,
-          hasImages: !!(currentProduct.images && currentProduct.images.length > 0),
-          imageCount: currentProduct.images?.length || 0,
-          shop
+          hasId: !!finalCurrentProduct.id,
+          hasName: !!finalCurrentProduct.name,
+          hasDescription: !!finalCurrentProduct.description,
+          descriptionLength: finalCurrentProduct.description?.length || 0,
+          hasCategory: !!finalCurrentProduct.category,
+          hasType: !!finalCurrentProduct.type,
+          hasPrice: !!finalCurrentProduct.price,
+          hasImages: !!(finalCurrentProduct.images && finalCurrentProduct.images.length > 0),
+          imageCount: finalCurrentProduct.images?.length || 0,
+          shopDomain
         })
       } else {
         // Even without product data, clarify context
         logger.warn(`No product data available for product page context`, {
-          pageContext,
-          hasCurrentProduct: !!currentProduct,
-          currentProductId: currentProduct?.id,
-          currentProductName: currentProduct?.name,
-          shop
+          pageType,
+          hasCurrentProduct: !!finalCurrentProduct,
+          currentProductId: finalCurrentProduct?.id,
+          currentProductName: finalCurrentProduct?.name,
+          shopDomain
         })
-        contextMessage = `\n\nPAGE CONTEXT: The customer is viewing a specific product page.\n\nCRITICAL CONTEXT RULE: When the customer is on a product page, ANY mention of "this", "this product", "this item", "it", or questions about usage, features, durability, suitability, everyday use, daily use, etc., ALWAYS refers to the CURRENT PRODUCT shown on this page. NEVER ask which product they're referring to - always assume they mean the current product.\n`
+        contextMessage = `\n\nPAGE CONTEXT: The customer is viewing a specific product page.\n\nCRITICAL CONTEXT RULE: When the customer is on a product page, ANY mention of "this", "this product", "this item", "it", or questions about usage, features, durability, suitability, everyday use, daily use, etc., ALWAYS refers to the CURRENT PRODUCT shown on this page. NEVER ask which product they're referring to - always assume they mean the current product.\n` + contextMessage
       }
       
       // FALLBACK PIPELINE: If primary pipeline (Shopify API fetch) didn't work and user is asking about product
       // Try URL-based analysis as fallback
       // This only runs if we don't have complete product data from Shopify
-      const hasCompleteProductData = currentProduct && currentProduct.name && currentProduct.description && currentProduct.images && currentProduct.images.length > 0
+      const hasCompleteProductData = finalCurrentProduct && finalCurrentProduct.name && finalCurrentProduct.description && finalCurrentProduct.images && finalCurrentProduct.images.length > 0
       
       if (isProductInquiry && productUrl && !hasCompleteProductData) {
         logger.info("Primary pipeline incomplete, attempting fallback URL analysis", { 
-          hasName: !!currentProduct?.name,
-          hasDescription: !!currentProduct?.description,
-          hasImages: !!(currentProduct?.images && currentProduct.images.length > 0),
+          hasName: !!finalCurrentProduct?.name,
+          hasDescription: !!finalCurrentProduct?.description,
+          hasImages: !!(finalCurrentProduct?.images && finalCurrentProduct.images.length > 0),
           productUrl 
         })
         
@@ -832,7 +970,7 @@ export async function POST(request: NextRequest) {
         }
       }
     } else {
-      contextMessage = `\n\nPAGE CONTEXT: The customer is browsing the Closelook store.\n`
+      contextMessage = `\n\nPAGE CONTEXT: The customer is browsing the store.\n` + contextMessage
     }
 
     // Add order data to context if available
@@ -966,7 +1104,7 @@ export async function POST(request: NextRequest) {
     let systemPrompt = buildSystemPrompt(customerName)
     
     // CRITICAL: If we're on a product page and have product data, emphasize it strongly
-    if (pageContext === "product" && currentProduct && (currentProduct.id || currentProduct.name)) {
+    if (pageType === "product" && finalCurrentProduct && (finalCurrentProduct.id || finalCurrentProduct.name)) {
       systemPrompt += `\n\n🔴 CRITICAL: THE CUSTOMER IS VIEWING A SPECIFIC PRODUCT PAGE.\n`
       systemPrompt += `🔴 PRODUCT DATA IS PROVIDED IN THE CONTEXT MESSAGE BELOW.\n`
       systemPrompt += `🔴 WHEN THE CUSTOMER ASKS "Tell me more about this product" OR ANY QUESTION ABOUT "this product", "this item", "it", etc.,\n`
@@ -1001,35 +1139,45 @@ export async function POST(request: NextRequest) {
       systemPrompt += `\n\nNOTE: The Shopify catalog appears to be empty or products could not be fetched. If the customer asks about products, politely let them know that product information is currently unavailable.`
     }
 
-    // Build conversation history
-    const history = conversationHistory || []
+    // Get conversation history from Redis if available, otherwise use provided history
+    let history = conversationHistory || []
+    if (sessionId) {
+      try {
+        const storedHistory = await getConversationHistory(sessionId)
+        if (storedHistory && storedHistory.length > history.length) {
+          history = storedHistory
+        }
+      } catch (error) {
+        logger.warn('Failed to load conversation history from Redis', { error })
+      }
+    }
     
     // Use the message as-is for primary pipeline (product data is already in context)
     // Only add URL to user message if primary pipeline failed and we're using fallback
     let userMessage = message
-    const hasCompleteProductData = currentProduct && currentProduct.name && currentProduct.description && currentProduct.images && currentProduct.images.length > 0
+    const hasCompleteProductData = finalCurrentProduct && finalCurrentProduct.name && finalCurrentProduct.description && finalCurrentProduct.images && finalCurrentProduct.images.length > 0
     if (isProductInquiry && productUrl && !hasCompleteProductData) {
       // Fallback: add URL to user message only if we don't have complete product data
       userMessage = `${message}\n\n[IMPORTANT: Please fetch and analyze the product page at this URL to answer: ${productUrl}]`
       logger.info("Using fallback: Added product URL to user message", { productUrl, hasCompleteProductData })
     } else if (isProductInquiry && hasCompleteProductData) {
       logger.info("Using primary pipeline: Product data fetched from Shopify API", { 
-        productName: currentProduct.name,
-        hasDescription: !!currentProduct.description,
-        imageCount: currentProduct.images?.length || 0
+        productName: finalCurrentProduct.name,
+        hasDescription: !!finalCurrentProduct.description,
+        imageCount: finalCurrentProduct.images?.length || 0
       })
     }
     
     // CRITICAL: Ensure context message is always included, especially for product pages
     // Log the context message being sent to Gemini for debugging
-    if (pageContext === "product" && isProductInquiry) {
+    if (pageType === "product" && isProductInquiry) {
       logger.info(`Sending product inquiry to Gemini`, {
         contextMessageLength: contextMessage.length,
-        hasProductData: !!currentProduct,
-        productName: currentProduct?.name,
-        productId: currentProduct?.id,
+        hasProductData: !!finalCurrentProduct,
+        productName: finalCurrentProduct?.name,
+        productId: finalCurrentProduct?.id,
         userMessage: userMessage.substring(0, 100),
-        shop
+        shopDomain
       })
     }
     

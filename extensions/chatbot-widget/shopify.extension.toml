@@ -1,0 +1,11 @@
+api_version = "2024-10"
+name = "Context-Aware Chatbot"
+type = "theme_extension"
+
+[build]
+watch = [
+  "**/*.js",
+  "**/*.css",
+  "**/*.liquid"
+]
+
