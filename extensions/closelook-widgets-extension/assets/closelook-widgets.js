@@ -38,10 +38,24 @@
     halfBodyUrl: null, // Saved image URL from server
     fullScreenImage: null,
     currentProduct: null,
-    productCatalog: [] // Store catalog for recommendation mapping
+    productCatalog: [], // Store catalog for recommendation mapping
+    contextManager: null // Context manager instance
   };
 
   console.log('🔧 Widget config:', config);
+  
+  // Initialize context manager if available
+  if (typeof window.ShopifyContextManager !== 'undefined') {
+    try {
+      state.contextManager = new window.ShopifyContextManager({
+        backendUrl: config.backendUrl,
+        shopDomain: window.Shopify?.shop || window.chatbotConfig?.shopDomain
+      });
+      console.log('✅ Context Manager initialized');
+    } catch (e) {
+      console.warn('⚠️ Context Manager initialization failed:', e);
+    }
+  }
 
   // ===== INITIALIZATION =====
 
@@ -611,12 +625,33 @@
       // Backend handles all product fetching via Storefront API using session
       // This eliminates /products.json access issues and improves performance
       
+      // Get context from context manager if available (for context-aware chatbot)
+      let context = null;
+      let sessionId = null;
+      
+      if (state.contextManager) {
+        try {
+          context = state.contextManager.getContext();
+          sessionId = state.contextManager.sessionId;
+          console.log('✅ Context captured:', {
+            pageType: context.page_type,
+            hasProduct: !!context.current_product,
+            hasCustomer: !!context.customer,
+            hasCart: !!context.cart
+          });
+        } catch (e) {
+          console.warn('⚠️ Failed to get context from context manager:', e);
+        }
+      }
+      
       // Build complete payload - backend will fetch products using shop domain
+      // Include context from context manager for context-aware chatbot
       const payload = {
         message: message,
         conversationHistory: conversationHistory,
         pageContext: pageContext, // 'home' | 'product' | 'other'
         shop: shopDomain, // CRITICAL: Backend uses this to fetch products via Storefront API
+        shop_domain: shopDomain, // Also send as shop_domain for compatibility
         customerName: customerName, // Customer name for personalization (only name, not sensitive data)
         customerInternal: customerInternal, // Internal customer info for backend API calls (id, email, accessToken)
         currentProduct: state.currentProduct ? {
@@ -629,7 +664,10 @@
           description: state.currentProduct.description,
           sizes: state.currentProduct.sizes,
           url: state.currentProduct.url || currentPageUrl // Current page URL for product page analysis
-        } : undefined
+        } : undefined,
+        // NEW: Add context from context manager for context-aware chatbot
+        context: context, // Full context object from context manager
+        session_id: sessionId || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}` // Session ID for Redis
         // REMOVED: allProducts field
         // Backend fetches products from Shopify Storefront API using session's storefront token
         // See app/api/chat/route.ts lines 269-346 for implementation

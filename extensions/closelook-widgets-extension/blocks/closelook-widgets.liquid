@@ -128,11 +128,35 @@
   window.closelookBackendUrl = {{ block.settings.backend_url | json }};
 </script>
 
+<!-- Load Context Manager First (for context-aware chatbot) -->
+<script src="{{ 'context-manager.js' | asset_url }}" defer></script>
+
 <!-- Load External CSS File -->
 {{ 'closelook-widgets.css' | asset_url | stylesheet_tag }}
 
 <!-- Load External JavaScript File - Removed async to ensure proper initialization -->
 <script src="{{ 'closelook-widgets.js' | asset_url }}"></script>
+
+<!-- Configure context-aware chatbot (if enabled) -->
+{% if block.settings.enable_chatbot %}
+<script>
+  // Set backend URL for context-aware chatbot
+  window.chatbotConfig = {
+    backendUrl: {{ block.settings.backend_url | json }},
+    shopDomain: '{{ shop.domain }}',
+    storeId: '{{ shop.id }}',
+    customerId: {% if customer.id %}'{{ customer.id }}'{% else %}null{% endif %}
+  };
+  
+  // Also set as meta tag for compatibility
+  if (!document.querySelector('meta[name="chatbot-backend"]')) {
+    const meta = document.createElement('meta');
+    meta.name = 'chatbot-backend';
+    meta.content = {{ block.settings.backend_url | json }};
+    document.head.appendChild(meta);
+  }
+</script>
+{% endif %}
 
 {% schema %}
 {
