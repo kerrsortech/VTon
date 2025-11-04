@@ -1,0 +1,12 @@
+api_version = "2024-10"
+name = "Context-Aware Chatbot"
+uid = "ce356a1a-03f8-caa9-edce-43d04377fd20186f7d10"
+type = "theme_app_extension"
+
+[build]
+watch = [
+  "**/*.js",
+  "**/*.css",
+  "**/*.liquid"
+]
+

@@ -3,7 +3,7 @@
  * Builds context strings for Gemini from structured context data
  */
 
-import { getContext } from './redis.js';
+import { getContext } from './redis';
 import type { Product } from './closelook-types';
 
 /**

@@ -26059,8 +26059,9 @@ function GlobalChatbot({ currentProduct, className }) {
                                                     node_modules_react.createElement("p", { className: "text-xs text-gray-600 dark:text-gray-400 mt-1 line-clamp-2" }, rec.reason))))));
                                 }))))))),
                         isLoading && (node_modules_react.createElement("div", { className: "flex justify-start" },
-                            node_modules_react.createElement("div", { className: "bg-gray-100 dark:bg-gray-800 rounded-2xl px-4 py-2.5 border border-gray-200 dark:border-gray-700" },
-                                node_modules_react.createElement(LoaderCircle, { className: "h-4 w-4 animate-spin text-gray-600 dark:text-gray-400" }))))))),
+                            node_modules_react.createElement("div", { className: "bg-gray-100 dark:bg-gray-800 rounded-2xl px-4 py-3 border border-gray-200 dark:border-gray-700 flex items-center gap-2" },
+                                node_modules_react.createElement(LoaderCircle, { className: "h-4 w-4 animate-spin text-gray-600 dark:text-gray-400" }),
+                                node_modules_react.createElement("span", { className: "text-sm text-gray-600 dark:text-gray-400" }, "Thinking..."))))))),
             showTemplates && (node_modules_react.createElement("div", { className: "px-4 pb-2 flex-shrink-0 space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-300" }, promptTemplates.map((template, index) => (node_modules_react.createElement("button", { key: index, onClick: () => handlePromptClick(template), className: "w-full text-left px-3 py-2 text-xs rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-all border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300" }, template))))),
             node_modules_react.createElement("div", { className: "p-4 border-t border-gray-200 dark:border-gray-800 flex-shrink-0 bg-white dark:bg-gray-900" },
                 node_modules_react.createElement("div", { className: "flex gap-2" },

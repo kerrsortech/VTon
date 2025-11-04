@@ -3,12 +3,12 @@
  * Uses Upstash Redis for serverless/edge compatibility
  */
 
-import { Redis } from '@upstash/redis';
+import { Redis as UpstashRedis } from '@upstash/redis';
 
 // Initialize Redis client
-let redis: Redis | null = null;
+let redis: UpstashRedis | null = null;
 
-function getRedisClient(): Redis {
+function getRedisClient(): UpstashRedis {
   if (!redis) {
     const url = process.env.UPSTASH_REDIS_REST_URL;
     const token = process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -19,7 +19,7 @@ function getRedisClient(): Redis {
       );
     }
 
-    redis = new Redis({
+    redis = new UpstashRedis({
       url,
       token,
     });
@@ -43,7 +43,12 @@ export async function setContext(
     const client = getRedisClient();
     const key = `context:${sessionId}`;
     await client.setex(key, ttl, JSON.stringify(context));
-  } catch (error) {
+  } catch (error: any) {
+    // If Redis is not configured, log warning but don't fail
+    if (error?.message?.includes('not configured') || error?.message?.includes('not installed')) {
+      console.warn('[Redis] Redis not configured, context will not be persisted:', error.message);
+      return;
+    }
     console.error('[Redis] Error setting context:', error);
     throw error;
   }
@@ -60,7 +65,12 @@ export async function getContext(sessionId: string): Promise<any | null> {
     const key = `context:${sessionId}`;
     const data = await client.get(key);
     return data ? JSON.parse(data as string) : null;
-  } catch (error) {
+  } catch (error: any) {
+    // If Redis is not configured, return null (graceful degradation)
+    if (error?.message?.includes('not configured') || error?.message?.includes('not installed')) {
+      console.warn('[Redis] Redis not configured, cannot retrieve context:', error.message);
+      return null;
+    }
     console.error('[Redis] Error getting context:', error);
     return null;
   }
@@ -81,7 +91,12 @@ export async function setConversationHistory(
     const client = getRedisClient();
     const key = `conversation:${sessionId}`;
     await client.setex(key, ttl, JSON.stringify(history));
-  } catch (error) {
+  } catch (error: any) {
+    // If Redis is not configured, log warning but don't fail
+    if (error?.message?.includes('not configured') || error?.message?.includes('not installed')) {
+      console.warn('[Redis] Redis not configured, conversation history will not be persisted:', error.message);
+      return;
+    }
     console.error('[Redis] Error setting conversation history:', error);
     throw error;
   }
@@ -100,7 +115,12 @@ export async function getConversationHistory(
     const key = `conversation:${sessionId}`;
     const data = await client.get(key);
     return data ? JSON.parse(data as string) : [];
-  } catch (error) {
+  } catch (error: any) {
+    // If Redis is not configured, return empty array (graceful degradation)
+    if (error?.message?.includes('not configured') || error?.message?.includes('not installed')) {
+      console.warn('[Redis] Redis not configured, cannot retrieve conversation history:', error.message);
+      return [];
+    }
     console.error('[Redis] Error getting conversation history:', error);
     return [];
   }
