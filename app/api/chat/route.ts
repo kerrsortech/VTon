@@ -215,23 +215,25 @@ export async function POST(request: NextRequest) {
       requestBody = await request.json()
     } catch (parseError) {
       logger.error("Invalid JSON in request body", { error: parseError })
-      return NextResponse.json(
+      const response = NextResponse.json(
         { error: "Invalid request format", details: "Request body must be valid JSON" },
         { status: 400 }
       )
+      return addCorsHeaders(response, request)
     }
 
     // Validate all inputs
     const validation = validateChatInput(requestBody)
     if (!validation.isValid) {
       logger.warn("Input validation failed", { errors: validation.errors })
-      return NextResponse.json(
+      const response = NextResponse.json(
         { 
           error: "Invalid input", 
           details: validation.errors.join(", ") 
         },
         { status: 400 }
       )
+      return addCorsHeaders(response, request)
     }
 
     const { 
@@ -247,10 +249,11 @@ export async function POST(request: NextRequest) {
 
     // Ensure message exists after validation
     if (!message || typeof message !== "string" || message.trim().length === 0) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { error: "Message is required and cannot be empty" },
         { status: 400 }
       )
+      return addCorsHeaders(response, request)
     }
 
     // Detect query type (order, policy, account, etc.)
@@ -279,10 +282,31 @@ export async function POST(request: NextRequest) {
           const adapter = new ShopifyProductAdapter(shop, storefrontToken)
           
           // Fetch current product details if product ID is provided (widget sends minimal data)
-          if (currentProduct && currentProduct.id && !currentProduct.category) {
+          // Always fetch from Shopify to ensure we have complete, up-to-date product data
+          // Check if product data is incomplete (missing name, description, or images)
+          const isProductIncomplete = currentProduct && currentProduct.id && (
+            !currentProduct.name || 
+            currentProduct.name.trim() === '' || 
+            !currentProduct.description || 
+            !currentProduct.images || 
+            currentProduct.images.length === 0
+          )
+          
+          if (currentProduct && currentProduct.id && isProductIncomplete) {
             try {
-              // Widget only sends ID, backend fetches full details
-              const closelookProduct = await adapter.getProduct(currentProduct.id)
+              // Widget only sends ID, backend fetches full details from Shopify
+              // Convert numeric ID to GID format if needed (Shopify GraphQL accepts both)
+              let productId = currentProduct.id
+              // If ID is numeric (not already in GID format), convert to GID
+              if (productId && !productId.startsWith('gid://')) {
+                // Remove any existing gid:// prefix and extract numeric part
+                const numericId = productId.replace(/^gid:\/\/shopify\/Product\//, '').replace(/[^0-9]/g, '')
+                if (numericId) {
+                  productId = `gid://shopify/Product/${numericId}`
+                }
+              }
+              
+              const closelookProduct = await adapter.getProduct(productId)
               if (closelookProduct) {
                 fetchedCurrentProduct = {
                   id: closelookProduct.id,
@@ -297,16 +321,23 @@ export async function POST(request: NextRequest) {
                   // Preserve URL from frontend if available (needed for product page analysis)
                   url: currentProduct.url,
                 }
-                logger.info(`Fetched current product details from Shopify: ${currentProduct.id}`, {
+                logger.info(`Fetched current product details from Shopify`, {
+                  originalId: currentProduct.id,
+                  convertedId: productId,
+                  productName: closelookProduct.name,
+                  hasDescription: !!closelookProduct.description,
+                  imageCount: closelookProduct.images?.length || 0,
                   hasUrl: !!currentProduct.url
                 })
               }
             } catch (productError) {
               logger.warn("Error fetching current product from Shopify", { 
                 error: productError instanceof Error ? productError.message : String(productError),
-                productId: currentProduct.id 
+                originalId: currentProduct.id,
+                convertedId: productId,
+                shop
               })
-              // Keep the minimal product data from widget
+              // Keep the minimal product data from widget as fallback
             }
           }
           
@@ -850,11 +881,12 @@ export async function POST(request: NextRequest) {
         : "I apologize, but I'm having trouble processing your request right now. Please try again in a moment, or feel free to ask me about our products, policies, or order information."
       
       // Return early with fallback response
-      return NextResponse.json({
+      const fallbackResponse = NextResponse.json({
         message: text,
         recommendations: [],
         ticketCreated: false,
       })
+      return addCorsHeaders(fallbackResponse, request)
     }
 
     // Extract product recommendations from LLM response
