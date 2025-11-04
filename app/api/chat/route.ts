@@ -130,6 +130,42 @@ function isProductSearchQuery(message: string): boolean {
   return searchKeywords.some((keyword) => lowerMessage.includes(keyword))
 }
 
+// Detect if the query is asking for product recommendations
+function isProductRecommendationQuery(message: string): boolean {
+  const lowerMessage = message.toLowerCase()
+  
+  const recommendationKeywords = [
+    "recommend",
+    "recommendation",
+    "suggest",
+    "suggestion",
+    "what should",
+    "what would",
+    "what do you have",
+    "what products",
+    "show me something",
+    "what can you",
+    "help me find",
+    "looking for something",
+    "what's good",
+    "best",
+    "top",
+    "popular",
+    "trending",
+    "featured",
+    "new products",
+    "latest",
+    "what's new",
+  ]
+  
+  return recommendationKeywords.some((keyword) => lowerMessage.includes(keyword))
+}
+
+// Detect if query needs product filtering/search/recommendations
+function shouldFilterProducts(message: string): boolean {
+  return isProductSearchQuery(message) || isProductRecommendationQuery(message)
+}
+
 // Detect if the user is asking about the current product
 function isAskingAboutCurrentProduct(message: string, hasCurrentProduct: boolean): boolean {
   if (!hasCurrentProduct) return false
@@ -281,18 +317,10 @@ export async function POST(request: NextRequest) {
         if (storefrontToken) {
           const adapter = new ShopifyProductAdapter(shop, storefrontToken)
           
-          // Fetch current product details if product ID is provided (widget sends minimal data)
-          // Always fetch from Shopify to ensure we have complete, up-to-date product data
-          // Check if product data is incomplete (missing name, description, or images)
-          const isProductIncomplete = currentProduct && currentProduct.id && (
-            !currentProduct.name || 
-            currentProduct.name.trim() === '' || 
-            !currentProduct.description || 
-            !currentProduct.images || 
-            currentProduct.images.length === 0
-          )
-          
-          if (currentProduct && currentProduct.id && isProductIncomplete) {
+          // CRITICAL: ALWAYS fetch complete product details from Shopify when product ID is provided
+          // This is the PRIMARY pipeline - widget may send minimal data, but backend always fetches full details
+          // This ensures Gemini receives complete, accurate product information
+          if (currentProduct && currentProduct.id) {
             try {
               // Widget only sends ID, backend fetches full details from Shopify
               // Convert numeric ID to GID format if needed (Shopify GraphQL accepts both)
@@ -306,6 +334,12 @@ export async function POST(request: NextRequest) {
                 }
               }
               
+              logger.info(`Fetching complete product details from Shopify`, {
+                originalId: currentProduct.id,
+                convertedId: productId,
+                shop
+              })
+              
               const closelookProduct = await adapter.getProduct(productId)
               if (closelookProduct) {
                 fetchedCurrentProduct = {
@@ -318,23 +352,31 @@ export async function POST(request: NextRequest) {
                   images: closelookProduct.images,
                   description: closelookProduct.description,
                   sizes: closelookProduct.sizes,
-                  // Preserve URL from frontend if available (needed for product page analysis)
-                  url: currentProduct.url,
+                  // Preserve URL from frontend if available (needed for fallback URL analysis)
+                  url: currentProduct.url || closelookProduct.url,
                 }
-                logger.info(`Fetched current product details from Shopify`, {
-                  originalId: currentProduct.id,
-                  convertedId: productId,
+                logger.info(`✅ Successfully fetched complete product details from Shopify`, {
+                  productId: closelookProduct.id,
                   productName: closelookProduct.name,
                   hasDescription: !!closelookProduct.description,
+                  descriptionLength: closelookProduct.description?.length || 0,
                   imageCount: closelookProduct.images?.length || 0,
-                  hasUrl: !!currentProduct.url
+                  hasSizes: !!closelookProduct.sizes && closelookProduct.sizes.length > 0,
+                  category: closelookProduct.category,
+                  type: closelookProduct.type,
+                  price: closelookProduct.price
+                })
+              } else {
+                logger.warn("Product not found in Shopify", { 
+                  originalId: currentProduct.id,
+                  convertedId: productId,
+                  shop
                 })
               }
             } catch (productError) {
-              logger.warn("Error fetching current product from Shopify", { 
+              logger.error("Error fetching current product from Shopify", { 
                 error: productError instanceof Error ? productError.message : String(productError),
                 originalId: currentProduct.id,
-                convertedId: productId,
                 shop
               })
               // Keep the minimal product data from widget as fallback
@@ -382,6 +424,16 @@ export async function POST(request: NextRequest) {
       (isAskingAboutCurrentProduct(message, true) || message.toLowerCase().includes("this")) : 
       isAskingAboutCurrentProduct(message, !!currentProduct)
     
+    // Get product URL for direct Gemini analysis
+    let productUrl: string | undefined = undefined
+    if (currentProduct?.url && typeof currentProduct.url === "string" && currentProduct.url.startsWith("http")) {
+      productUrl = currentProduct.url
+    } else if (pageContext === "product" && currentProduct?.id && shop) {
+      // Fallback: construct URL from shop domain
+      const shopDomain = shop.replace(/\.myshopify\.com$/, '')
+      productUrl = `https://${shopDomain}.myshopify.com/products/${currentProduct.id}`
+    }
+    
     let productPageAnalysis = null
     
     // Analyze product page if:
@@ -389,71 +441,26 @@ export async function POST(request: NextRequest) {
     // 2. User is on product page and message contains "this" (contextual inquiry)
     const shouldAnalyzePage = (isProductInquiry || (pageContext === "product" && message.toLowerCase().includes("this"))) && currentProduct
     
-    if (shouldAnalyzePage && currentProduct) {
-      try {
-        // Construct product URL
-        let productUrl: string | undefined = undefined
-        
-        // Priority 1: Use product.url from request if available (already validated in frontend)
-        if (currentProduct.url && typeof currentProduct.url === "string" && currentProduct.url.startsWith("http")) {
-          productUrl = currentProduct.url
-        } 
-        // Priority 2: Construct URL from shop domain if available
-        else if (shop && currentProduct.id) {
-          // For Shopify stores, construct the product URL
-          // Note: This uses product ID, but Shopify URLs typically use handle
-          // However, this should still work for page analysis
-          const shopDomain = shop.replace(/\.myshopify\.com$/, '')
-          productUrl = `https://${shopDomain}.myshopify.com/products/${currentProduct.id}`
-        }
-        // For demo/Next.js app with relative URLs, skip analysis
-        else if (currentProduct.id) {
-          // We can't analyze relative URLs, so skip
-          logger.debug("Skipping page analysis for relative URL", { productId: currentProduct.id })
-        }
-        
-        // Analyze product page if we have a valid URL
-        if (productUrl) {
-          logger.info("Analyzing product page for inquiry", { productUrl, productId: currentProduct.id })
-          const apiKey = process.env.GOOGLE_GEMINI_API_KEY
-          if (apiKey) {
-            try {
-              productPageAnalysis = await analyzeProductPage(productUrl, apiKey).catch((error) => {
-                logger.warn("Product page analysis failed, continuing without it", { 
-                  error: error instanceof Error ? error.message : String(error),
-                  productUrl 
-                })
-                return null
-              })
-              
-              if (productPageAnalysis) {
-                logger.info("Product page analysis successful", { productId: currentProduct.id })
-              }
-            } catch (error) {
-              logger.warn("Error during product page analysis", { 
-                error: error instanceof Error ? error.message : String(error) 
-              })
-            }
-          }
-        }
-      } catch (error) {
-        logger.warn("Error in product page analysis flow", { 
-          error: error instanceof Error ? error.message : String(error) 
-        })
-      }
-    }
+    // For product inquiries, we'll send URL directly to Gemini for analysis
+    // This is simpler and more reliable than pre-fetching content
     
     // SCALABILITY: Use semantic search to retrieve only relevant products
     // This prevents sending entire catalog (e.g., 1000 products) to LLM
+    // IMPORTANT: Always filter products when user is asking for recommendations, search, or product suggestions
+    // This ensures content-aware responses based on actual Shopify catalog
     let relevantProducts: Product[] = []
     let queryIntent: QueryIntent | null = null
     let recommendations: any[] = []
 
     const catalogSize = allProductsToUse.length
     const isLargeCatalog = catalogSize > 50
+    const needsProductFiltering = shouldFilterProducts(message)
 
-    // For large catalogs, use intelligent product retrieval
-    if (isLargeCatalog && allProductsToUse.length > 0) {
+    // Always filter products when:
+    // 1. User is asking for recommendations/search (needsProductFiltering), OR
+    // 2. Catalog is large (isLargeCatalog)
+    // This ensures we only send relevant products to Gemini, making responses content-aware
+    if (needsProductFiltering || isLargeCatalog) {
       try {
         const apiKey = process.env.GOOGLE_GEMINI_API_KEY || ""
         
@@ -466,9 +473,10 @@ export async function POST(request: NextRequest) {
         }
 
         // Retrieve only relevant products (top N based on query intent)
+        // For recommendation queries, use higher limit to give Gemini more options
         const productLimit = queryIntent
           ? getProductLimitForQuery(queryIntent, catalogSize)
-          : 20 // Default limit
+          : (needsProductFiltering ? 20 : 50) // Default: 20 for filtered queries, 50 for large catalogs
 
         relevantProducts = await retrieveRelevantProducts(allProductsToUse as Product[], message, {
           maxProducts: productLimit,
@@ -476,7 +484,11 @@ export async function POST(request: NextRequest) {
           apiKey: apiKey,
         })
 
-        logger.debug(`Retrieved ${relevantProducts.length} relevant products from catalog of ${catalogSize} products`)
+        logger.info(`Retrieved ${relevantProducts.length} relevant products from catalog of ${catalogSize} products`, {
+          queryIntent: queryIntent?.intent,
+          needsFiltering: needsProductFiltering,
+          isLargeCatalog,
+        })
 
         // Convert to recommendations format
         if (relevantProducts.length > 0) {
@@ -495,24 +507,12 @@ export async function POST(request: NextRequest) {
         relevantProducts = smartFilterProducts(allProductsToUse as Product[], message).slice(0, 20)
       }
     } else if (allProductsToUse.length > 0) {
-      // For small catalogs, use simple filtering
-      const isSearchQuery = isProductSearchQuery(message)
-      if (isSearchQuery) {
-        relevantProducts = smartFilterProducts(allProductsToUse as Product[], message)
-        if (relevantProducts.length > 0) {
-          recommendations = relevantProducts.slice(0, 10).map((product) => ({
-            id: product.id,
-            name: product.name,
-            price: product.price,
-            reason: `Matches your search criteria`,
-            imageUrl: product.images?.[0] || undefined,
-            url: shop ? `https://${shop.replace(/\.myshopify\.com$/, '')}.myshopify.com/products/${product.id}` : `/product/${product.id}`,
-          }))
-        }
-      } else {
-        // For small catalogs and non-search queries, use all products
-        relevantProducts = allProductsToUse as Product[]
-      }
+      // For small catalogs and non-filtering queries (general questions, order queries, etc.),
+      // still include products for context but limit to prevent token overflow
+      // If catalog is small, sending all products is fine (they'll all be relevant)
+      const maxProductsForSmallCatalog = Math.min(allProductsToUse.length, 50)
+      relevantProducts = allProductsToUse.slice(0, maxProductsForSmallCatalog)
+      logger.debug(`Using all products from small catalog (${allProductsToUse.length} products)`)
     }
 
     // Fetch order and policy data if needed (only when explicitly asked)
@@ -645,37 +645,121 @@ export async function POST(request: NextRequest) {
     if (pageContext === "home") {
       contextMessage = `\n\nPAGE CONTEXT: The customer is browsing the home page/catalog.\n`
     } else if (pageContext === "product") {
-      // CRITICAL: Always provide product context when on product page, even if product data is minimal
+      // PRIMARY PIPELINE: Send complete product details fetched from Shopify to Gemini
+      // This is the main way to provide product information - fetched directly from Shopify API
       if (currentProduct) {
-        contextMessage = `\n\nPAGE CONTEXT: The customer is viewing a specific product page.\n\nCRITICAL CONTEXT RULE: When the customer is on a product page, ANY mention of "this", "this product", "this item", "it", or questions about usage, features, durability, suitability, everyday use, daily use, etc., ALWAYS refers to the CURRENT PRODUCT shown on this page. NEVER ask which product they're referring to - always assume they mean the current product.\n\nCURRENT PRODUCT:\nName: ${currentProduct.name || "Product"}\n${currentProduct.category ? `Category: ${currentProduct.category}\n` : ""}${currentProduct.type ? `Type: ${currentProduct.type}\n` : ""}${currentProduct.color ? `Color: ${currentProduct.color}\n` : ""}${currentProduct.price ? `Price: $${currentProduct.price}\n` : ""}${currentProduct.description ? `Description: ${currentProduct.description}\n` : ""}`
+        // Build comprehensive product details message
+        let productDetails = `\n\n═══════════════════════════════════════════════════════════\n`
+        productDetails += `🎯 PRODUCT THE CUSTOMER IS VIEWING (Fetched from Shopify API):\n`
+        productDetails += `═══════════════════════════════════════════════════════════\n\n`
+        
+        productDetails += `PRODUCT ID: ${currentProduct.id || "N/A"}\n`
+        productDetails += `PRODUCT NAME: ${currentProduct.name || "N/A"}\n\n`
+        
+        if (currentProduct.description) {
+          productDetails += `DESCRIPTION:\n${currentProduct.description}\n\n`
+        }
+        
+        if (currentProduct.category) {
+          productDetails += `CATEGORY: ${currentProduct.category}\n`
+        }
+        if (currentProduct.type) {
+          productDetails += `TYPE: ${currentProduct.type}\n`
+        }
+        if (currentProduct.color) {
+          productDetails += `COLOR: ${currentProduct.color}\n`
+        }
+        if (currentProduct.price) {
+          productDetails += `PRICE: $${currentProduct.price}\n`
+        }
+        if (currentProduct.sizes && currentProduct.sizes.length > 0) {
+          productDetails += `AVAILABLE SIZES: ${currentProduct.sizes.join(", ")}\n`
+        }
+        if (currentProduct.images && currentProduct.images.length > 0) {
+          productDetails += `IMAGES: ${currentProduct.images.length} image(s) available\n`
+          // Include first image URL for context
+          if (currentProduct.images[0]) {
+            productDetails += `PRIMARY IMAGE URL: ${currentProduct.images[0]}\n`
+          }
+        }
+        
+        productDetails += `\n═══════════════════════════════════════════════════════════\n`
+        productDetails += `⚠️ CRITICAL INSTRUCTIONS:\n`
+        productDetails += `═══════════════════════════════════════════════════════════\n\n`
+        productDetails += `1. The customer is viewing THIS PRODUCT on the product page.\n`
+        productDetails += `2. When the customer says "this", "this product", "this item", "it", or asks questions about the product, they are ALWAYS referring to THE PRODUCT DETAILS SHOWN ABOVE.\n`
+        productDetails += `3. You MUST use the product information above to answer their questions.\n`
+        productDetails += `4. DO NOT ask "which product?" - they are asking about THE PRODUCT ABOVE.\n`
+        productDetails += `5. Provide detailed, specific answers using the product name, description, category, type, color, price, sizes, and other details from above.\n`
+        productDetails += `6. Be comprehensive and informative - use ALL the product information available above.\n\n`
+        
+        contextMessage = productDetails
       } else {
         // Even without product data, clarify context
         contextMessage = `\n\nPAGE CONTEXT: The customer is viewing a specific product page.\n\nCRITICAL CONTEXT RULE: When the customer is on a product page, ANY mention of "this", "this product", "this item", "it", or questions about usage, features, durability, suitability, everyday use, daily use, etc., ALWAYS refers to the CURRENT PRODUCT shown on this page. NEVER ask which product they're referring to - always assume they mean the current product.\n`
       }
       
-      // Add detailed product page analysis if available (for any product inquiry)
-      if (productPageAnalysis && shouldAnalyzePage) {
-        contextMessage += `\n\nDETAILED PRODUCT ANALYSIS (from product page):\n`
-        if (productPageAnalysis.summary) {
-          contextMessage += `Summary: ${productPageAnalysis.summary}\n`
-        }
-        if (productPageAnalysis.enhancedDescription) {
-          contextMessage += `Enhanced Description: ${productPageAnalysis.enhancedDescription}\n`
-        }
-        if (productPageAnalysis.productDetails) {
-          contextMessage += `Product Details: ${productPageAnalysis.productDetails}\n`
-        }
-        if (productPageAnalysis.designElements) {
-          contextMessage += `Design Elements: ${productPageAnalysis.designElements}\n`
-        }
-        if (productPageAnalysis.materials) {
-          contextMessage += `Materials: ${productPageAnalysis.materials}\n`
-        }
-        if (productPageAnalysis.keyFeatures && productPageAnalysis.keyFeatures.length > 0) {
-          contextMessage += `Key Features: ${productPageAnalysis.keyFeatures.join(", ")}\n`
+      // FALLBACK PIPELINE: If primary pipeline (Shopify API fetch) didn't work and user is asking about product
+      // Try URL-based analysis as fallback
+      // This only runs if we don't have complete product data from Shopify
+      const hasCompleteProductData = currentProduct && currentProduct.name && currentProduct.description && currentProduct.images && currentProduct.images.length > 0
+      
+      if (isProductInquiry && productUrl && !hasCompleteProductData) {
+        logger.info("Primary pipeline incomplete, attempting fallback URL analysis", { 
+          hasName: !!currentProduct?.name,
+          hasDescription: !!currentProduct?.description,
+          hasImages: !!(currentProduct?.images && currentProduct.images.length > 0),
+          productUrl 
+        })
+        
+        // Try to fetch page content as fallback
+        try {
+          const apiKey = process.env.GOOGLE_GEMINI_API_KEY
+          if (apiKey) {
+            productPageAnalysis = await analyzeProductPage(productUrl, apiKey).catch((error) => {
+              logger.warn("Fallback product page analysis failed", { 
+                error: error instanceof Error ? error.message : String(error),
+                productUrl 
+              })
+              return null
+            })
+          }
+        } catch (error) {
+          logger.warn("Error in fallback product page analysis", { error })
         }
         
-        contextMessage += `\nIMPORTANT: The customer is asking about this product. Use the detailed product analysis above to provide comprehensive information about the product. Be thorough, informative, and highlight key features, materials, design elements, and other relevant details from the product page analysis.`
+        // Include URL and fetched content in context
+        contextMessage += `\n\n═══════════════════════════════════════════════════════════\n`
+        contextMessage += `🔄 FALLBACK: PRODUCT PAGE ANALYSIS (URL-based)\n`
+        contextMessage += `═══════════════════════════════════════════════════════════\n\n`
+        contextMessage += `PRODUCT PAGE URL: ${productUrl}\n\n`
+        
+        if (productPageAnalysis) {
+          contextMessage += `✅ PRODUCT PAGE CONTENT (fetched and analyzed):\n`
+          if (productPageAnalysis.summary) {
+            contextMessage += `Summary: ${productPageAnalysis.summary}\n`
+          }
+          if (productPageAnalysis.enhancedDescription) {
+            contextMessage += `Description: ${productPageAnalysis.enhancedDescription}\n`
+          }
+          if (productPageAnalysis.productDetails) {
+            contextMessage += `Details: ${productPageAnalysis.productDetails}\n`
+          }
+          if (productPageAnalysis.designElements) {
+            contextMessage += `Design: ${productPageAnalysis.designElements}\n`
+          }
+          if (productPageAnalysis.materials) {
+            contextMessage += `Materials: ${productPageAnalysis.materials}\n`
+          }
+          if (productPageAnalysis.keyFeatures && productPageAnalysis.keyFeatures.length > 0) {
+            contextMessage += `Features: ${productPageAnalysis.keyFeatures.join(", ")}\n`
+          }
+          contextMessage += `\nUse the information above to provide comprehensive details about "this product".`
+        } else {
+          // If we couldn't fetch, instruct Gemini to fetch/analyze the URL
+          contextMessage += `⚠️ IMPORTANT: Please fetch and analyze the product page at the URL above to answer the customer's question about "this product".\n`
+          contextMessage += `Use any available web search or URL fetching capabilities to retrieve the page content and provide accurate information.\n`
+        }
       }
     } else {
       contextMessage = `\n\nPAGE CONTEXT: The customer is browsing the Closelook store.\n`
@@ -810,20 +894,51 @@ export async function POST(request: NextRequest) {
 
     // Build system prompt with customer name for personalization
     let systemPrompt = buildSystemPrompt(customerName)
+    
+    // Enhance system prompt based on query intent and available products
+    // This ensures Gemini understands what type of response to give
     if (queryIntent) {
       if (queryIntent.intent === "search" && relevantProducts.length > 0) {
-        systemPrompt += `\n\nIMPORTANT: The customer asked for products matching specific criteria. ${relevantProducts.length} relevant product(s) were found matching their query. When responding, mention these products and use the PRODUCT_RECOMMENDATION format for each matching product.`
+        systemPrompt += `\n\nIMPORTANT: The customer asked for products matching specific criteria. ${relevantProducts.length} relevant product(s) were found matching their query from the Shopify catalog. When responding, mention these products and use the PRODUCT_RECOMMENDATION format for each matching product. All products shown are real products from the store catalog.`
       } else if (queryIntent.intent === "search" && relevantProducts.length === 0) {
-        systemPrompt += `\n\nIMPORTANT: The customer asked for products matching specific criteria, but no products were found matching their exact query. Politely inform them that no products match their criteria, but suggest similar products or ask if they'd like to adjust their search.`
+        systemPrompt += `\n\nIMPORTANT: The customer asked for products matching specific criteria, but no products were found matching their exact query in the Shopify catalog. Politely inform them that no products match their criteria, but suggest similar products from the AVAILABLE PRODUCTS list or ask if they'd like to adjust their search.`
       } else if (queryIntent.intent === "recommendation") {
-        systemPrompt += `\n\nIMPORTANT: The customer is asking for product recommendations. Use the AVAILABLE PRODUCTS listed above to suggest relevant products that match their needs. Use the PRODUCT_RECOMMENDATION format for each recommendation.`
+        systemPrompt += `\n\nIMPORTANT: The customer is asking for product recommendations. Use the AVAILABLE PRODUCTS listed above (all from the Shopify catalog) to suggest relevant products that match their needs, preferences, or the scenario they described. Analyze the query intent, category preferences, price range, colors, and any scenario mentioned (e.g., "winter wedding", "casual wear"). Use the PRODUCT_RECOMMENDATION format for each recommendation. All recommended products must be from the AVAILABLE PRODUCTS list above.`
+      } else if (queryIntent.intent === "comparison") {
+        systemPrompt += `\n\nIMPORTANT: The customer wants to compare products. Use the AVAILABLE PRODUCTS listed above to provide detailed comparisons. Use the PRODUCT_RECOMMENDATION format when mentioning products.`
+      } else if (queryIntent.intent === "question" && relevantProducts.length > 0) {
+        systemPrompt += `\n\nIMPORTANT: The customer has a question, but ${relevantProducts.length} relevant product(s) are available in case you need to reference or recommend products in your answer. Use the PRODUCT_RECOMMENDATION format if you mention any products.`
       }
-    } else if (relevantProducts.length > 0) {
-      systemPrompt += `\n\nIMPORTANT: ${relevantProducts.length} relevant product(s) matching the customer's query are available. When recommending products, use the PRODUCT_RECOMMENDATION format for each suggestion.`
+    } else if (needsProductFiltering && relevantProducts.length > 0) {
+      // User asked for recommendations/search but intent extraction didn't work
+      systemPrompt += `\n\nIMPORTANT: The customer is asking for product recommendations or searching for products. ${relevantProducts.length} relevant product(s) matching their query have been filtered from the Shopify catalog. When recommending products, use the PRODUCT_RECOMMENDATION format for each suggestion. All products shown are real products from the store catalog.`
+    } else if (relevantProducts.length > 0 && catalogSize > 0) {
+      // General case: products are available
+      systemPrompt += `\n\nIMPORTANT: ${relevantProducts.length} product(s) from the Shopify catalog are available. When recommending or mentioning products, use the PRODUCT_RECOMMENDATION format for each suggestion. All products shown are real products from the store catalog.`
+    } else if (shop && catalogSize === 0) {
+      // No products found in Shopify catalog
+      systemPrompt += `\n\nNOTE: The Shopify catalog appears to be empty or products could not be fetched. If the customer asks about products, politely let them know that product information is currently unavailable.`
     }
 
     // Build conversation history
     const history = conversationHistory || []
+    
+    // Use the message as-is for primary pipeline (product data is already in context)
+    // Only add URL to user message if primary pipeline failed and we're using fallback
+    let userMessage = message
+    const hasCompleteProductData = currentProduct && currentProduct.name && currentProduct.description && currentProduct.images && currentProduct.images.length > 0
+    if (isProductInquiry && productUrl && !hasCompleteProductData) {
+      // Fallback: add URL to user message only if we don't have complete product data
+      userMessage = `${message}\n\n[IMPORTANT: Please fetch and analyze the product page at this URL to answer: ${productUrl}]`
+      logger.info("Using fallback: Added product URL to user message", { productUrl, hasCompleteProductData })
+    } else if (isProductInquiry && hasCompleteProductData) {
+      logger.info("Using primary pipeline: Product data fetched from Shopify API", { 
+        productName: currentProduct.name,
+        hasDescription: !!currentProduct.description,
+        imageCount: currentProduct.images?.length || 0
+      })
+    }
+    
     const messages = [
       {
         role: "user",
@@ -843,7 +958,7 @@ export async function POST(request: NextRequest) {
       })),
       {
         role: "user",
-        parts: [{ text: message }],
+        parts: [{ text: userMessage }],
       },
     ]
 

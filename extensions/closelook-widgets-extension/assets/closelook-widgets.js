@@ -741,7 +741,7 @@
     }
   }
 
-  async function fetchUserImages() {
+  async function fetchUserImages(userId = null) {
     const backendUrl = config.backendUrl.replace(/\/$/, '') + '/api/user-images';
     try {
       // Get Shopify customer ID from window if available (for Shopify stores)
@@ -752,6 +752,11 @@
       const headers = {};
       if (shopifyCustomerId) {
         headers['x-shopify-customer-id'] = shopifyCustomerId.toString();
+      }
+      // If userId is provided (e.g., from upload response), send it as header
+      // This ensures we can fetch images immediately after upload even if cookie isn't set yet
+      if (userId) {
+        headers['x-user-id'] = userId;
       }
 
       const response = await fetch(backendUrl, {
@@ -1090,15 +1095,49 @@
 
     if (fullBodyInput) {
       fullBodyInput.onchange = (e) => handleImageSelect(e.target.files[0], 'fullBody');
+      // Stop propagation on file input to prevent dropzone click handler from firing
+      fullBodyInput.onclick = (e) => {
+        e.stopPropagation();
+      };
       if (fullBodyDropzone) {
-        fullBodyDropzone.onclick = () => fullBodyInput.click();
+        fullBodyDropzone.onclick = (e) => {
+          // Don't trigger if clicking on remove button (it has its own handler)
+          if (e.target.closest('#remove-full-body')) {
+            return;
+          }
+          // Don't trigger if clicking directly on the file input (native behavior handles it)
+          // This prevents double-triggering when user clicks directly on the input
+          if (e.target === fullBodyInput || fullBodyInput.contains(e.target)) {
+            return;
+          }
+          // Trigger file picker for any other click in the dropzone (placeholder or preview area)
+          e.stopPropagation();
+          fullBodyInput.click();
+        };
       }
     }
 
     if (halfBodyInput) {
       halfBodyInput.onchange = (e) => handleImageSelect(e.target.files[0], 'halfBody');
+      // Stop propagation on file input to prevent dropzone click handler from firing
+      halfBodyInput.onclick = (e) => {
+        e.stopPropagation();
+      };
       if (halfBodyDropzone) {
-        halfBodyDropzone.onclick = () => halfBodyInput.click();
+        halfBodyDropzone.onclick = (e) => {
+          // Don't trigger if clicking on remove button (it has its own handler)
+          if (e.target.closest('#remove-half-body')) {
+            return;
+          }
+          // Don't trigger if clicking directly on the file input (native behavior handles it)
+          // This prevents double-triggering when user clicks directly on the input
+          if (e.target === halfBodyInput || halfBodyInput.contains(e.target)) {
+            return;
+          }
+          // Trigger file picker for any other click in the dropzone (placeholder or preview area)
+          e.stopPropagation();
+          halfBodyInput.click();
+        };
       }
     }
 
@@ -1244,6 +1283,9 @@
       const result = await response.json();
       console.log('✅ Upload successful:', result);
 
+      // Get userId from upload response to use for fetching images
+      const uploadedUserId = result.userId;
+
       // Clear local previews (temporary upload state)
       state.fullBodyPhoto = null;
       state.halfBodyPhoto = null;
@@ -1252,8 +1294,9 @@
 
       // Fetch and store the uploaded images from server
       // This ensures we have the correct URLs that are saved to the database
+      // Pass userId from upload response to ensure we can fetch immediately
       try {
-        const userImages = await fetchUserImages();
+        const userImages = await fetchUserImages(uploadedUserId);
         if (userImages.fullBodyUrl) {
           state.fullBodyUrl = userImages.fullBodyUrl;
           state.fullBodyPreview = userImages.fullBodyUrl; // Display saved image
@@ -1264,8 +1307,29 @@
           state.halfBodyPreview = userImages.halfBodyUrl; // Display saved image
           console.log('✅ Stored half body image URL:', userImages.halfBodyUrl);
         }
+        
+        // Update the upload dialog to show the uploaded images in the placeholder
+        if (state.isUploadDialogOpen) {
+          renderUploadDialog();
+        }
       } catch (error) {
         console.warn('Failed to fetch uploaded images after save:', error);
+        // Even if fetch fails, try to update dialog in case we have URLs from upload response
+        if (result.images && result.images.length > 0) {
+          // Use images from upload response as fallback
+          result.images.forEach(img => {
+            if (img.type === 'fullBody') {
+              state.fullBodyUrl = img.url;
+              state.fullBodyPreview = img.url;
+            } else if (img.type === 'halfBody') {
+              state.halfBodyUrl = img.url;
+              state.halfBodyPreview = img.url;
+            }
+          });
+          if (state.isUploadDialogOpen) {
+            renderUploadDialog();
+          }
+        }
       }
 
       closeUploadDialog();
