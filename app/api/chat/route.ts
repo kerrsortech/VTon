@@ -24,6 +24,7 @@ import { addCorsHeaders, createCorsPreflightResponse, isAllowedOrigin } from "@/
 import { ShopifyProductAdapter } from "@/lib/closelook-plugin/adapters/shopify-adapter"
 import type { CloselookProduct } from "@/lib/closelook-plugin/types"
 import { analyzeProductPage } from "@/lib/product-page-analyzer"
+import { ensureStorefrontToken } from "@/lib/shopify/storefront-token"
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "")
 
@@ -307,12 +308,9 @@ export async function POST(request: NextRequest) {
     
     if (shop) {
       try {
-        // Get Shopify session to access Storefront API
-        const session = await getSession(shop)
-        
-        // Check if we have storefront token in environment (for widget context)
-        // Or use session's storefront token if available
-        const storefrontToken = process.env.SHOPIFY_STOREFRONT_TOKEN || session?.storefrontToken
+        // Ensure we have a Storefront Access Token
+        // This will check env, session, or create one if needed
+        const storefrontToken = await ensureStorefrontToken(shop)
         
         if (storefrontToken) {
           const adapter = new ShopifyProductAdapter(shop, storefrontToken)
@@ -425,17 +423,17 @@ export async function POST(request: NextRequest) {
       isAskingAboutCurrentProduct(message, !!currentProduct)
     
     // Get product URL for direct Gemini analysis
-    let productUrl: string | undefined = undefined
+        let productUrl: string | undefined = undefined
     if (currentProduct?.url && typeof currentProduct.url === "string" && currentProduct.url.startsWith("http")) {
-      productUrl = currentProduct.url
+          productUrl = currentProduct.url
     } else if (pageContext === "product" && currentProduct?.id && shop) {
       // Fallback: construct URL from shop domain
-      const shopDomain = shop.replace(/\.myshopify\.com$/, '')
-      productUrl = `https://${shopDomain}.myshopify.com/products/${currentProduct.id}`
-    }
+          const shopDomain = shop.replace(/\.myshopify\.com$/, '')
+          productUrl = `https://${shopDomain}.myshopify.com/products/${currentProduct.id}`
+        }
     
     let productPageAnalysis = null
-    
+        
     // Analyze product page if:
     // 1. User is asking about current product (explicit inquiry), OR
     // 2. User is on product page and message contains "this" (contextual inquiry)
@@ -736,24 +734,24 @@ export async function POST(request: NextRequest) {
         
         if (productPageAnalysis) {
           contextMessage += `✅ PRODUCT PAGE CONTENT (fetched and analyzed):\n`
-          if (productPageAnalysis.summary) {
-            contextMessage += `Summary: ${productPageAnalysis.summary}\n`
-          }
-          if (productPageAnalysis.enhancedDescription) {
+        if (productPageAnalysis.summary) {
+          contextMessage += `Summary: ${productPageAnalysis.summary}\n`
+        }
+        if (productPageAnalysis.enhancedDescription) {
             contextMessage += `Description: ${productPageAnalysis.enhancedDescription}\n`
-          }
-          if (productPageAnalysis.productDetails) {
+        }
+        if (productPageAnalysis.productDetails) {
             contextMessage += `Details: ${productPageAnalysis.productDetails}\n`
-          }
-          if (productPageAnalysis.designElements) {
+        }
+        if (productPageAnalysis.designElements) {
             contextMessage += `Design: ${productPageAnalysis.designElements}\n`
-          }
-          if (productPageAnalysis.materials) {
-            contextMessage += `Materials: ${productPageAnalysis.materials}\n`
-          }
-          if (productPageAnalysis.keyFeatures && productPageAnalysis.keyFeatures.length > 0) {
+        }
+        if (productPageAnalysis.materials) {
+          contextMessage += `Materials: ${productPageAnalysis.materials}\n`
+        }
+        if (productPageAnalysis.keyFeatures && productPageAnalysis.keyFeatures.length > 0) {
             contextMessage += `Features: ${productPageAnalysis.keyFeatures.join(", ")}\n`
-          }
+        }
           contextMessage += `\nUse the information above to provide comprehensive details about "this product".`
         } else {
           // If we couldn't fetch, instruct Gemini to fetch/analyze the URL

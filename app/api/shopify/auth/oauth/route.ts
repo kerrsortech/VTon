@@ -71,14 +71,43 @@ export async function GET(request: NextRequest) {
 
     logger.info("Access token retrieved successfully", { shop })
 
-    // PRODUCTION FIX: Generate Storefront API token for public product queries
+    // PRODUCTION FIX: Generate Storefront API token using GraphQL (matches official docs)
     // This allows the backend to fetch products without requiring Admin API access
     let storefrontToken: string | undefined = undefined
     try {
-      logger.info("Generating Storefront API token", { shop })
+      logger.info("Generating Storefront API token via GraphQL", { shop })
       
+      const mutation = `
+        mutation StorefrontAccessTokenCreate($input: StorefrontAccessTokenInput!) {
+          storefrontAccessTokenCreate(input: $input) {
+            userErrors {
+              field
+              message
+            }
+            shop {
+              id
+            }
+            storefrontAccessToken {
+              accessScopes {
+                handle
+              }
+              accessToken
+              title
+              id
+              createdAt
+            }
+          }
+        }
+      `
+
+      const variables = {
+        input: {
+          title: "Closelook Virtual Try-On Widget",
+        },
+      }
+
       const storefrontResponse = await fetch(
-        `https://${shop}/admin/api/2024-01/storefront_access_tokens.json`,
+        `https://${shop}/admin/api/2025-10/graphql.json`,
         {
           method: "POST",
           headers: {
@@ -86,21 +115,36 @@ export async function GET(request: NextRequest) {
             "X-Shopify-Access-Token": accessToken,
           },
           body: JSON.stringify({
-            storefront_access_token: {
-              title: "Closelook Virtual Try-On Widget",
-            },
+            query: mutation,
+            variables,
           }),
         }
       )
 
       if (storefrontResponse.ok) {
         const storefrontData = await storefrontResponse.json()
-        storefrontToken = storefrontData.storefront_access_token?.access_token
-        logger.info("Storefront token generated successfully", { shop })
+        
+        // Check for GraphQL errors
+        if (storefrontData.errors || storefrontData.data?.storefrontAccessTokenCreate?.userErrors?.length > 0) {
+          const errors = storefrontData.errors || storefrontData.data?.storefrontAccessTokenCreate?.userErrors
+          logger.warn("GraphQL errors creating Storefront token", { 
+            shop,
+            errors 
+          })
+        } else {
+          storefrontToken = storefrontData.data?.storefrontAccessTokenCreate?.storefrontAccessToken?.accessToken
+          if (storefrontToken) {
+            logger.info("Storefront token generated successfully via GraphQL", { shop })
+          } else {
+            logger.warn("No Storefront token in response", { shop, data: storefrontData })
+          }
+        }
       } else {
-        logger.warn("Failed to generate storefront token, will fall back to Admin API", { 
+        const errorText = await storefrontResponse.text()
+        logger.warn("Failed to generate storefront token via GraphQL", { 
           shop,
-          status: storefrontResponse.status 
+          status: storefrontResponse.status,
+          error: errorText
         })
       }
     } catch (storefrontError) {

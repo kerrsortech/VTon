@@ -40,7 +40,7 @@ export async function fetchCustomerFromStorefront(
 
   try {
     const response = await fetch(
-      `https://${storefrontDomain}/api/2024-01/graphql.json`,
+      `https://${storefrontDomain}/api/2024-10/graphql.json`,
       {
         method: "POST",
         headers: {
@@ -128,7 +128,7 @@ export async function fetchCustomerOrdersFromStorefront(
 
   try {
     const response = await fetch(
-      `https://${storefrontDomain}/api/2024-01/graphql.json`,
+      `https://${storefrontDomain}/api/2024-10/graphql.json`,
       {
         method: "POST",
         headers: {

@@ -29,7 +29,7 @@ interface ShopifyProduct {
 export class ShopifyProductAdapter implements ProductAdapter {
   private storeDomain: string
   private accessToken: string
-  private apiVersion = "2024-01"
+  private apiVersion = "2024-10"
 
   constructor(storeDomain: string, accessToken: string) {
     this.storeDomain = storeDomain
