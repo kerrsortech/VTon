@@ -295,8 +295,17 @@ export async function POST(request: NextRequest) {
       return addCorsHeaders(response, request)
     }
 
+    // ============ CRITICAL FIX: Log full request body for debugging ============
+    logger.info('[Chat API] Full request body:', JSON.stringify(requestBody, null, 2))
+    
     // Get session ID from request (from new context-aware widget)
     const sessionId = requestBody.session_id || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    
+    // ============ CRITICAL FIX: Extract currentProduct from request body ============
+    // Frontend sends: { currentProduct: { id: "8252597338298", ... } }
+    const currentProductFromBody = requestBody.currentProduct || null
+    
+    logger.info('[Chat API] Extracted currentProduct from body:', JSON.stringify(currentProductFromBody, null, 2))
     
     // Get context from request (new context-aware widget sends this)
     let context = requestBody.context || null
@@ -341,14 +350,65 @@ export async function POST(request: NextRequest) {
     // Use shop from context if available, otherwise use validated input
     const shopDomain = context?.shop_domain || shop || requestBody.shop_domain
     const pageType = context?.page_type || pageContext || 'other'
-    let productId = context?.current_product?.id || context?.current_product?.gid || currentProduct?.id
+    
+    // ============ CRITICAL FIX: Extract product ID from multiple sources ============
+    // Priority: 1. currentProductFromBody (from frontend payload), 2. context.current_product, 3. currentProduct (from validation)
+    let productId = currentProductFromBody?.id || 
+                   context?.current_product?.id || 
+                   context?.current_product?.gid || 
+                   currentProduct?.id
+    
+    logger.info('[Chat API] Product ID extracted:', { 
+      productId,
+      fromBody: currentProductFromBody?.id,
+      fromContext: context?.current_product?.id || context?.current_product?.gid,
+      fromValidated: currentProduct?.id
+    })
     
     let fetchedProducts: Product[] = []
-    let fetchedCurrentProduct: Product | undefined = currentProduct || (context?.current_product ? {
+    
+    // ============ CRITICAL FIX: Use currentProductFromBody as primary source ============
+    let productToFetch: { id?: string; handle?: string } | null = null
+    
+    if (currentProductFromBody && currentProductFromBody.id) {
+      productToFetch = {
+        id: currentProductFromBody.id,
+        handle: currentProductFromBody.url ? 
+          currentProductFromBody.url.split('/products/')[1]?.split('?')[0] : 
+          currentProductFromBody.handle || null
+      }
+      logger.info('[Chat API] Product to fetch from body:', productToFetch)
+    } else if (context?.current_product && (context.current_product.id || context.current_product.gid || context.current_product.handle)) {
+      productToFetch = {
+        id: context.current_product.id || context.current_product.gid,
+        handle: context.current_product.handle || null
+      }
+      logger.info('[Chat API] Product to fetch from context:', productToFetch)
+    } else if (currentProduct?.id) {
+      productToFetch = {
+        id: currentProduct.id,
+        handle: currentProduct.handle || null
+      }
+      logger.info('[Chat API] Product to fetch from validated input:', productToFetch)
+    }
+    
+    let fetchedCurrentProduct: Product | undefined = currentProductFromBody ? {
+      id: currentProductFromBody.id,
+      name: currentProductFromBody.title || currentProductFromBody.name || "Product",
+      category: currentProductFromBody.category || currentProductFromBody.type || "",
+      type: currentProductFromBody.type || "",
+      color: currentProductFromBody.color || "",
+      price: currentProductFromBody.price || 0,
+      images: currentProductFromBody.images || [],
+      description: currentProductFromBody.description || "",
+      sizes: currentProductFromBody.sizes || [],
+      url: currentProductFromBody.url || undefined,
+      handle: currentProductFromBody.handle || undefined
+    } : (currentProduct || (context?.current_product ? {
       id: context.current_product.id || context.current_product.gid,
       name: context.current_product.title || context.current_product.name,
       handle: context.current_product.handle
-    } : undefined)
+    } : undefined))
     
     if (shopDomain) {
       try {
@@ -359,43 +419,34 @@ export async function POST(request: NextRequest) {
         if (storefrontToken) {
           const adapter = new ShopifyProductAdapter(shopDomain, storefrontToken)
           
-          // CRITICAL: ALWAYS fetch complete product details from Shopify when product ID is provided
-          // This is the PRIMARY pipeline - widget may send minimal data, but backend always fetches full details
+          // ============ CRITICAL FIX: Fetch product using productToFetch ============
+          // Always fetch complete product details from Shopify when product ID is provided
           // This ensures Gemini receives complete, accurate product information
-          // Try product ID from context first, then fallback to currentProduct
-          if (productId || (context?.current_product?.handle && !productId)) {
+          if (productToFetch && (productToFetch.id || productToFetch.handle)) {
             try {
-              // Widget only sends ID, backend fetches full details from Shopify
-              // Convert numeric ID to GID format if needed (Shopify GraphQL accepts both)
-              // Try handle first if available, otherwise use ID
-              let productIdToFetch = productId?.toString().trim() || currentProduct?.id?.toString().trim()
+              logger.info('[Chat API] Fetching product details from Shopify...', productToFetch)
               
-              // If we have handle but no ID, try fetching by handle
-              if (!productIdToFetch && context?.current_product?.handle) {
+              let closelookProduct: CloselookProduct | null = null
+              
+              // Try fetching by handle first if available, otherwise use ID
+              if (productToFetch.handle) {
                 try {
-                  const productByHandle = await adapter.getProductByHandle(context.current_product.handle)
-                  if (productByHandle) {
-                    fetchedCurrentProduct = {
-                      id: productByHandle.id,
-                      name: productByHandle.name,
-                      category: productByHandle.category || '',
-                      type: productByHandle.type || '',
-                      color: productByHandle.color || '',
-                      price: productByHandle.price || 0,
-                      images: productByHandle.images || [],
-                      description: productByHandle.description || '',
-                      sizes: productByHandle.sizes || [],
-                    }
-                    logger.info('✅ Product fetched by handle from Shopify')
-                    // Skip the ID-based fetch below
-                    productIdToFetch = null
+                  closelookProduct = await adapter.getProductByHandle(productToFetch.handle)
+                  if (closelookProduct) {
+                    logger.info('[Chat API] ✅ Product fetched by handle from Shopify', {
+                      id: closelookProduct.id,
+                      name: closelookProduct.name
+                    })
                   }
                 } catch (handleError) {
-                  logger.warn('Failed to fetch product by handle', { error: handleError })
+                  logger.warn('[Chat API] Failed to fetch product by handle', { error: handleError })
                 }
               }
               
-              if (productIdToFetch) {
+              // If handle fetch failed or we only have ID, try fetching by ID
+              if (!closelookProduct && productToFetch.id) {
+                let productIdToFetch = productToFetch.id.toString().trim()
+                
                 // If ID is numeric (not already in GID format), convert to GID
                 if (productIdToFetch && !productIdToFetch.startsWith('gid://')) {
                   // Remove any existing gid:// prefix and extract numeric part
@@ -404,64 +455,71 @@ export async function POST(request: NextRequest) {
                     productIdToFetch = `gid://shopify/Product/${numericId}`
                   } else {
                     // If we can't extract numeric ID, try using the ID as-is
-                    logger.warn("Could not extract numeric ID, using as-is", { originalId: productIdToFetch })
+                    logger.warn('[Chat API] Could not extract numeric ID, using as-is', { originalId: productIdToFetch })
                   }
                 }
                 
-                logger.info(`Fetching complete product details from Shopify`, {
-                  originalId: productIdToFetch,
+                logger.info('[Chat API] Fetching complete product details from Shopify by ID', {
+                  productId: productIdToFetch,
                   shopDomain,
                   hasStorefrontToken: !!storefrontToken
                 })
                 
-                const closelookProduct = await adapter.getProduct(productIdToFetch)
+                try {
+                  closelookProduct = await adapter.getProduct(productIdToFetch)
+                } catch (idError) {
+                  logger.warn('[Chat API] Failed to fetch product by ID', { error: idError })
+                }
+              }
+              
+              // If we successfully fetched product, update fetchedCurrentProduct
               if (closelookProduct) {
                 fetchedCurrentProduct = {
                   id: closelookProduct.id,
-                  name: closelookProduct.name || currentProduct.name || "Product",
-                  category: closelookProduct.category || currentProduct.category || "",
-                  type: closelookProduct.type || currentProduct.type || "",
-                  color: closelookProduct.color || currentProduct.color || "",
-                  price: closelookProduct.price || currentProduct.price || 0,
+                  name: closelookProduct.name || fetchedCurrentProduct?.name || "Product",
+                  category: closelookProduct.category || fetchedCurrentProduct?.category || "",
+                  type: closelookProduct.type || fetchedCurrentProduct?.type || "",
+                  color: closelookProduct.color || fetchedCurrentProduct?.color || "",
+                  price: closelookProduct.price || fetchedCurrentProduct?.price || 0,
                   images: closelookProduct.images && closelookProduct.images.length > 0 
                     ? closelookProduct.images 
-                    : (currentProduct.images || []),
-                  description: closelookProduct.description || currentProduct.description || "",
-                  sizes: closelookProduct.sizes || currentProduct.sizes || [],
+                    : (fetchedCurrentProduct?.images || []),
+                  description: closelookProduct.description || fetchedCurrentProduct?.description || "",
+                  sizes: closelookProduct.sizes || fetchedCurrentProduct?.sizes || [],
                   // Preserve URL from frontend if available (needed for fallback URL analysis)
-                  url: currentProduct.url || closelookProduct.url || undefined,
+                  url: fetchedCurrentProduct?.url || undefined,
+                  handle: closelookProduct.handle || fetchedCurrentProduct?.handle || undefined
                 }
-                  logger.info(`✅ Successfully fetched complete product details from Shopify`, {
-                    productId: closelookProduct.id,
-                    productName: closelookProduct.name,
-                    hasDescription: !!closelookProduct.description,
-                    descriptionLength: closelookProduct.description?.length || 0,
-                    imageCount: closelookProduct.images?.length || 0,
-                    hasSizes: !!closelookProduct.sizes && closelookProduct.sizes.length > 0,
-                    category: closelookProduct.category,
-                    type: closelookProduct.type,
-                    price: closelookProduct.price
-                  })
-                } else {
-                  logger.warn("Product not found in Shopify, using widget data", { 
-                    originalId: productIdToFetch,
-                    shopDomain,
-                    widgetProductName: fetchedCurrentProduct?.name
-                  })
-                  // Keep widget data but ensure we have at least a name
-                  if (fetchedCurrentProduct && !fetchedCurrentProduct.name && fetchedCurrentProduct.id) {
-                    fetchedCurrentProduct = {
-                      ...fetchedCurrentProduct,
-                      name: `Product ${fetchedCurrentProduct.id}`,
-                    }
+                logger.info('[Chat API] ✅ Successfully fetched complete product details from Shopify', {
+                  productId: closelookProduct.id,
+                  productName: closelookProduct.name,
+                  hasDescription: !!closelookProduct.description,
+                  descriptionLength: closelookProduct.description?.length || 0,
+                  imageCount: closelookProduct.images?.length || 0,
+                  hasSizes: !!closelookProduct.sizes && closelookProduct.sizes.length > 0,
+                  category: closelookProduct.category,
+                  type: closelookProduct.type,
+                  price: closelookProduct.price
+                })
+              } else {
+                logger.warn('[Chat API] Product not found in Shopify, using widget data', { 
+                  productToFetch,
+                  shopDomain,
+                  widgetProductName: fetchedCurrentProduct?.name
+                })
+                // Keep widget data but ensure we have at least a name
+                if (fetchedCurrentProduct && !fetchedCurrentProduct.name && fetchedCurrentProduct.id) {
+                  fetchedCurrentProduct = {
+                    ...fetchedCurrentProduct,
+                    name: `Product ${fetchedCurrentProduct.id}`,
                   }
                 }
               }
             } catch (productError) {
-              logger.error("Error fetching current product from Shopify", { 
+              logger.error('[Chat API] Error fetching current product from Shopify', { 
                 error: productError instanceof Error ? productError.message : String(productError),
                 errorStack: productError instanceof Error ? productError.stack : undefined,
-                originalId: productId,
+                productToFetch,
                 shopDomain
               })
               // Keep the minimal product data from widget as fallback
@@ -580,6 +638,130 @@ export async function POST(request: NextRequest) {
     // For product inquiries, we'll send URL directly to Gemini for analysis
     // This is simpler and more reliable than pre-fetching content
     
+    // ============ CRITICAL FIX: Extract filters from message for recommendations ============
+    // Detect if user is asking for recommendations with filters (price, color, category)
+    const isRecommendationQuery = isProductRecommendationQuery(message)
+    
+    // Extract filters from message (price, color, category)
+    interface Filters {
+      maxPrice?: number
+      color?: string
+      category?: string
+    }
+    
+    function extractFilters(message: string): Filters {
+      const filters: Filters = {}
+      const messageLower = message.toLowerCase()
+      
+      // Extract price (e.g., "under $100", "less than $50", "below $75")
+      const priceMatch = messageLower.match(/(?:under|less than|below|cheaper than|max|maximum|under|up to)\s*\$?(\d+)/)
+      if (priceMatch) {
+        filters.maxPrice = parseInt(priceMatch[1])
+      }
+      
+      // Extract colors
+      const colors = ['red', 'blue', 'green', 'black', 'white', 'yellow', 'purple', 'pink', 'orange', 'brown', 'gray', 'grey', 'navy', 'beige', 'tan']
+      for (const color of colors) {
+        if (messageLower.includes(color)) {
+          filters.color = color
+          break
+        }
+      }
+      
+      // Extract categories (customize for your store)
+      const categories = ['snowboard', 'boots', 'bindings', 'jacket', 'pants', 'gloves', 'goggles', 'helmet', 'backpack', 'bag']
+      for (const category of categories) {
+        if (messageLower.includes(category)) {
+          filters.category = category
+          break
+        }
+      }
+      
+      logger.info('[Chat API] Extracted filters from message:', filters)
+      
+      return filters
+    }
+    
+    // Get filtered products if filters are detected
+    async function getFilteredProducts(shopDomain: string, filters: Filters): Promise<Product[]> {
+      if (!shopDomain) return []
+      
+      try {
+        const storefrontToken = await ensureStorefrontToken(shopDomain)
+        if (!storefrontToken) {
+          logger.warn('[Chat API] No storefront token for filtered products')
+          return []
+        }
+        
+        const adapter = new ShopifyProductAdapter(shopDomain, storefrontToken)
+        
+        // Fetch all products (or use Shopify search query if we have category)
+        let allProductsList: CloselookProduct[] = []
+        
+        if (filters.category) {
+          // Use Shopify search query for category
+          const searchQuery = `product_type:${filters.category}`
+          allProductsList = await adapter.getProductsByQuery(searchQuery, 50)
+        } else {
+          // Fetch all products
+          allProductsList = await adapter.getAllProducts({ limit: 50 })
+        }
+        
+        if (!allProductsList || allProductsList.length === 0) {
+          logger.info('[Filter] No products found from Shopify')
+          return []
+        }
+        
+        logger.info('[Filter] Filtering', allProductsList.length, 'products with filters:', filters)
+        
+        let filtered = allProductsList.map((cp: CloselookProduct) => ({
+          id: cp.id,
+          name: cp.name,
+          category: cp.category,
+          type: cp.type,
+          color: cp.color,
+          price: cp.price,
+          images: cp.images,
+          description: cp.description,
+          sizes: cp.sizes || [],
+        }))
+        
+        // Filter by max price
+        if (filters.maxPrice) {
+          filtered = filtered.filter(p => 
+            p.price && p.price <= filters.maxPrice!
+          )
+          logger.info('[Filter] After price filter (<= $' + filters.maxPrice + '):', filtered.length)
+        }
+        
+        // Filter by category/type
+        if (filters.category) {
+          const categoryLower = filters.category.toLowerCase()
+          filtered = filtered.filter(p => 
+            p.category?.toLowerCase().includes(categoryLower) ||
+            p.type?.toLowerCase().includes(categoryLower)
+          )
+          logger.info('[Filter] After category filter (' + filters.category + '):', filtered.length)
+        }
+        
+        // Filter by color
+        if (filters.color) {
+          const colorLower = filters.color.toLowerCase()
+          filtered = filtered.filter(p =>
+            p.name?.toLowerCase().includes(colorLower) ||
+            p.color?.toLowerCase().includes(colorLower) ||
+            p.category?.toLowerCase().includes(colorLower)
+          )
+          logger.info('[Filter] After color filter (' + filters.color + '):', filtered.length)
+        }
+        
+        return filtered
+      } catch (error) {
+        logger.error('[Filter] Error fetching filtered products', { error: error instanceof Error ? error.message : String(error) })
+        return []
+      }
+    }
+
     // SCALABILITY: Use semantic search to retrieve only relevant products
     // This prevents sending entire catalog (e.g., 1000 products) to LLM
     // IMPORTANT: Always filter products when user is asking for recommendations, search, or product suggestions
@@ -591,6 +773,36 @@ export async function POST(request: NextRequest) {
     const catalogSize = allProductsToUse.length
     const isLargeCatalog = catalogSize > 50
     const needsProductFiltering = shouldFilterProducts(message)
+    
+    // ============ CRITICAL FIX: Apply filters for recommendations ============
+    let filteredProducts: Product[] = []
+    
+    if (isRecommendationQuery) {
+      logger.info('[Chat API] Detected recommendation query')
+      
+      // Extract filters from message
+      const filters = extractFilters(message)
+      
+      if (Object.keys(filters).length > 0) {
+        logger.info('[Chat API] Applying filters:', filters)
+        
+        // Get filtered products from Shopify
+        if (shopDomain) {
+          filteredProducts = await getFilteredProducts(shopDomain, filters)
+        } else {
+          // Fallback: filter from existing products
+          filteredProducts = smartFilterProducts(allProductsToUse as Product[], message)
+        }
+        
+        if (filteredProducts.length > 0) {
+          logger.info('[Chat API] Found', filteredProducts.length, 'filtered products')
+          // Use filtered products as relevant products
+          relevantProducts = filteredProducts.slice(0, 10)
+        } else {
+          logger.info('[Chat API] No products found matching filters')
+        }
+      }
+    }
 
     // Always filter products when:
     // 1. User is asking for recommendations/search (needsProductFiltering), OR
@@ -614,11 +826,17 @@ export async function POST(request: NextRequest) {
           ? getProductLimitForQuery(queryIntent, catalogSize)
           : (needsProductFiltering ? 20 : 50) // Default: 20 for filtered queries, 50 for large catalogs
 
-        relevantProducts = await retrieveRelevantProducts(allProductsToUse as Product[], message, {
-          maxProducts: productLimit,
-          useGeminiIntent: !!apiKey,
-          apiKey: apiKey,
-        })
+        // Use filtered products if available, otherwise use semantic search
+        if (filteredProducts.length > 0) {
+          relevantProducts = filteredProducts.slice(0, productLimit)
+          logger.info('[Chat API] Using filtered products for recommendations')
+        } else {
+          relevantProducts = await retrieveRelevantProducts(allProductsToUse as Product[], message, {
+            maxProducts: productLimit,
+            useGeminiIntent: !!apiKey,
+            apiKey: apiKey,
+          })
+        }
 
         logger.info(`Retrieved ${relevantProducts.length} relevant products from catalog of ${catalogSize} products`, {
           queryIntent: queryIntent?.intent,

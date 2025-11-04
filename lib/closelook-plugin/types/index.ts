@@ -6,6 +6,7 @@
 export interface CloselookProduct {
   id: string
   name: string
+  handle?: string // Product handle/slug (for Shopify URLs)
   category: string
   type: string
   color: string

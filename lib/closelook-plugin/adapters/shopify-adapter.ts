@@ -99,6 +99,23 @@ export class ShopifyProductAdapter implements ProductAdapter {
       price = Number.parseFloat(variant.price)
     }
     
+    // Extract sizes from variants
+    const sizes: string[] = []
+    if (product.variants?.edges) {
+      product.variants.edges.forEach((edge: any) => {
+        const variantNode = edge.node
+        if (variantNode.selectedOptions) {
+          variantNode.selectedOptions.forEach((option: any) => {
+            if (option.name?.toLowerCase() === 'size' && option.value) {
+              if (!sizes.includes(option.value)) {
+                sizes.push(option.value)
+              }
+            }
+          })
+        }
+      })
+    }
+    
     // Extract images (handle GraphQL edge format)
     const images = product.images?.edges?.map((e: any) => e.node.url) || 
                    product.images?.map((img: any) => img.url) || 
@@ -107,12 +124,14 @@ export class ShopifyProductAdapter implements ProductAdapter {
     return {
       id: product.id,
       name: product.title,
+      handle: product.handle || "",
       category: product.productType || "Uncategorized",
       type: product.productType || "",
       color: product.tags?.find((tag: string) => tag.toLowerCase().startsWith("color:"))?.replace(/^color:/i, "") || "",
       price: price,
       images: images,
       description: product.description || "",
+      sizes: sizes,
       metadata: {
         platform: "shopify",
         shopifyId: product.id,
@@ -127,6 +146,7 @@ export class ShopifyProductAdapter implements ProductAdapter {
         product(id: $id) {
           id
           title
+          handle
           productType
           description
           tags
@@ -152,6 +172,51 @@ export class ShopifyProductAdapter implements ProductAdapter {
     `
 
     const result = await this.fetchShopify(query, { id })
+    if (!result.data?.product) return null
+
+    return this.mapShopifyProduct(result.data.product)
+  }
+
+  async getProductByHandle(handle: string): Promise<CloselookProduct | null> {
+    const query = `
+      query getProductByHandle($handle: String!) {
+        product(handle: $handle) {
+          id
+          title
+          handle
+          productType
+          description
+          tags
+          images(first: 10) {
+            edges {
+              node {
+                url
+              }
+            }
+          }
+          variants(first: 10) {
+            edges {
+              node {
+                id
+                title
+                price {
+                  amount
+                  currencyCode
+                }
+                selectedOptions {
+                  name
+                  value
+                }
+                availableForSale
+              }
+            }
+          }
+          availableForSale
+        }
+      }
+    `
+
+    const result = await this.fetchShopify(query, { handle })
     if (!result.data?.product) return null
 
     return this.mapShopifyProduct(result.data.product)
@@ -216,8 +281,73 @@ export class ShopifyProductAdapter implements ProductAdapter {
   }
 
   async searchProducts(query: string): Promise<CloselookProduct[]> {
-    // Implement Shopify product search
-    throw new Error("Not implemented - use Shopify search API")
+    return this.getProductsByQuery(query)
+  }
+
+  /**
+   * Get products by search query (or all products if empty query)
+   */
+  async getProductsByQuery(searchQuery: string = '', limit: number = 50): Promise<CloselookProduct[]> {
+    const query = `
+      query getProducts($first: Int!, $query: String) {
+        products(first: $first, query: $query) {
+          edges {
+            node {
+              id
+              title
+              handle
+              productType
+              description
+              tags
+              images(first: 10) {
+                edges {
+                  node {
+                    url
+                  }
+                }
+              }
+              variants(first: 10) {
+                edges {
+                  node {
+                    id
+                    title
+                    price {
+                      amount
+                      currencyCode
+                    }
+                    selectedOptions {
+                      name
+                      value
+                    }
+                    availableForSale
+                  }
+                }
+              }
+              availableForSale
+            }
+          }
+        }
+      }
+    `
+
+    try {
+      const result = await this.fetchShopify(query, { 
+        first: limit,
+        query: searchQuery || null
+      })
+      
+      const products = result.data?.products?.edges || []
+      
+      logger.info(`[Shopify] Fetched ${products.length} products with query: "${searchQuery}"`)
+      
+      return products.map((edge: any) => this.mapShopifyProduct(edge.node))
+    } catch (error) {
+      logger.error("Error fetching products by query from Shopify", { 
+        error: error instanceof Error ? error.message : String(error),
+        query: searchQuery 
+      })
+      return []
+    }
   }
 
   async getAllProducts(options?: { limit?: number; offset?: number }): Promise<CloselookProduct[]> {
