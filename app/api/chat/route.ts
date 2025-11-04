@@ -322,36 +322,42 @@ export async function POST(request: NextRequest) {
             try {
               // Widget only sends ID, backend fetches full details from Shopify
               // Convert numeric ID to GID format if needed (Shopify GraphQL accepts both)
-              let productId = currentProduct.id
+              let productId = currentProduct.id.toString().trim()
               // If ID is numeric (not already in GID format), convert to GID
               if (productId && !productId.startsWith('gid://')) {
                 // Remove any existing gid:// prefix and extract numeric part
                 const numericId = productId.replace(/^gid:\/\/shopify\/Product\//, '').replace(/[^0-9]/g, '')
                 if (numericId) {
                   productId = `gid://shopify/Product/${numericId}`
+                } else {
+                  // If we can't extract numeric ID, try using the ID as-is
+                  logger.warn("Could not extract numeric ID, using as-is", { originalId: currentProduct.id })
                 }
               }
               
               logger.info(`Fetching complete product details from Shopify`, {
                 originalId: currentProduct.id,
                 convertedId: productId,
-                shop
+                shop,
+                hasStorefrontToken: !!storefrontToken
               })
               
               const closelookProduct = await adapter.getProduct(productId)
               if (closelookProduct) {
                 fetchedCurrentProduct = {
                   id: closelookProduct.id,
-                  name: closelookProduct.name,
-                  category: closelookProduct.category,
-                  type: closelookProduct.type,
-                  color: closelookProduct.color,
-                  price: closelookProduct.price,
-                  images: closelookProduct.images,
-                  description: closelookProduct.description,
-                  sizes: closelookProduct.sizes,
+                  name: closelookProduct.name || currentProduct.name || "Product",
+                  category: closelookProduct.category || currentProduct.category || "",
+                  type: closelookProduct.type || currentProduct.type || "",
+                  color: closelookProduct.color || currentProduct.color || "",
+                  price: closelookProduct.price || currentProduct.price || 0,
+                  images: closelookProduct.images && closelookProduct.images.length > 0 
+                    ? closelookProduct.images 
+                    : (currentProduct.images || []),
+                  description: closelookProduct.description || currentProduct.description || "",
+                  sizes: closelookProduct.sizes || currentProduct.sizes || [],
                   // Preserve URL from frontend if available (needed for fallback URL analysis)
-                  url: currentProduct.url || closelookProduct.url,
+                  url: currentProduct.url || closelookProduct.url || undefined,
                 }
                 logger.info(`✅ Successfully fetched complete product details from Shopify`, {
                   productId: closelookProduct.id,
@@ -365,20 +371,42 @@ export async function POST(request: NextRequest) {
                   price: closelookProduct.price
                 })
               } else {
-                logger.warn("Product not found in Shopify", { 
+                logger.warn("Product not found in Shopify, using widget data", { 
                   originalId: currentProduct.id,
                   convertedId: productId,
-                  shop
+                  shop,
+                  widgetProductName: currentProduct.name
                 })
+                // Keep widget data but ensure we have at least a name
+                if (!currentProduct.name && currentProduct.id) {
+                  fetchedCurrentProduct = {
+                    ...currentProduct,
+                    name: `Product ${currentProduct.id}`,
+                  }
+                }
               }
             } catch (productError) {
               logger.error("Error fetching current product from Shopify", { 
                 error: productError instanceof Error ? productError.message : String(productError),
+                errorStack: productError instanceof Error ? productError.stack : undefined,
                 originalId: currentProduct.id,
                 shop
               })
               // Keep the minimal product data from widget as fallback
+              // Ensure we have at least a name
+              if (currentProduct && !currentProduct.name && currentProduct.id) {
+                fetchedCurrentProduct = {
+                  ...currentProduct,
+                  name: `Product ${currentProduct.id}`,
+                }
+              }
             }
+          } else if (currentProduct && !currentProduct.id) {
+            logger.warn("Current product exists but has no ID", {
+              hasName: !!currentProduct.name,
+              hasCategory: !!currentProduct.category,
+              shop
+            })
           }
           
           // Fetch all products from Shopify Storefront API using adapter
@@ -412,6 +440,20 @@ export async function POST(request: NextRequest) {
     
     // Use fetched current product or fallback to provided one
     currentProduct = fetchedCurrentProduct || currentProduct
+    
+    // Log final product state for debugging
+    if (pageContext === "product") {
+      logger.info(`Final product state for context`, {
+        hasProduct: !!currentProduct,
+        productId: currentProduct?.id,
+        productName: currentProduct?.name,
+        hasDescription: !!currentProduct?.description,
+        descriptionLength: currentProduct?.description?.length || 0,
+        hasName: !!currentProduct?.name,
+        wasFetched: !!fetchedCurrentProduct,
+        shop
+      })
+    }
     
     // Use fetched products from backend, fallback to products from request (for demo/Next.js app)
     const allProductsToUse = fetchedProducts.length > 0 ? fetchedProducts : (allProducts || [])
@@ -645,8 +687,9 @@ export async function POST(request: NextRequest) {
     } else if (pageContext === "product") {
       // PRIMARY PIPELINE: Send complete product details fetched from Shopify to Gemini
       // This is the main way to provide product information - fetched directly from Shopify API
-      if (currentProduct) {
+      if (currentProduct && (currentProduct.id || currentProduct.name)) {
         // Build comprehensive product details message
+        // ALWAYS include product context even if some fields are missing
         let productDetails = `\n\n═══════════════════════════════════════════════════════════\n`
         productDetails += `🎯 PRODUCT THE CUSTOMER IS VIEWING (Fetched from Shopify API):\n`
         productDetails += `═══════════════════════════════════════════════════════════\n\n`
@@ -656,6 +699,8 @@ export async function POST(request: NextRequest) {
         
         if (currentProduct.description) {
           productDetails += `DESCRIPTION:\n${currentProduct.description}\n\n`
+        } else {
+          productDetails += `DESCRIPTION: Not available (product may be new or details still loading)\n\n`
         }
         
         if (currentProduct.category) {
@@ -682,18 +727,45 @@ export async function POST(request: NextRequest) {
         }
         
         productDetails += `\n═══════════════════════════════════════════════════════════\n`
-        productDetails += `⚠️ CRITICAL INSTRUCTIONS:\n`
+        productDetails += `⚠️ CRITICAL INSTRUCTIONS - YOU MUST FOLLOW THESE:\n`
         productDetails += `═══════════════════════════════════════════════════════════\n\n`
-        productDetails += `1. The customer is viewing THIS PRODUCT on the product page.\n`
-        productDetails += `2. When the customer says "this", "this product", "this item", "it", or asks questions about the product, they are ALWAYS referring to THE PRODUCT DETAILS SHOWN ABOVE.\n`
-        productDetails += `3. You MUST use the product information above to answer their questions.\n`
-        productDetails += `4. DO NOT ask "which product?" - they are asking about THE PRODUCT ABOVE.\n`
-        productDetails += `5. Provide detailed, specific answers using the product name, description, category, type, color, price, sizes, and other details from above.\n`
-        productDetails += `6. Be comprehensive and informative - use ALL the product information available above.\n\n`
+        productDetails += `1. The customer is viewing THIS SPECIFIC PRODUCT (${currentProduct.name || "Product ID: " + currentProduct.id}) on the product page.\n`
+        productDetails += `2. When the customer says "this", "this product", "this item", "it", or asks questions like "Tell me more about this product", they are ALWAYS referring to THE PRODUCT DETAILS SHOWN ABOVE.\n`
+        productDetails += `3. You MUST use the product information above to answer their questions. DO NOT ask "which product?" or say you're having trouble accessing product details.\n`
+        productDetails += `4. If the description is missing, use the product name, category, type, color, price, and other available details to provide information.\n`
+        productDetails += `5. If the customer asks "Tell me more about this product", provide comprehensive information based on what you know:\n`
+        productDetails += `   - Product name: ${currentProduct.name || "N/A"}\n`
+        productDetails += `   - Category: ${currentProduct.category || "N/A"}\n`
+        productDetails += `   - Type: ${currentProduct.type || "N/A"}\n`
+        productDetails += `   - Price: $${currentProduct.price || "N/A"}\n`
+        productDetails += `   - Description: ${currentProduct.description ? "Available above" : "Use category and type to provide general information"}\n`
+        productDetails += `6. Be comprehensive and informative - use ALL the product information available above.\n`
+        productDetails += `7. DO NOT say you're having trouble accessing product details - you have the product information above.\n\n`
         
         contextMessage = productDetails
+        
+        // Log what we're sending to Gemini
+        logger.info(`Product context message for Gemini`, {
+          hasId: !!currentProduct.id,
+          hasName: !!currentProduct.name,
+          hasDescription: !!currentProduct.description,
+          descriptionLength: currentProduct.description?.length || 0,
+          hasCategory: !!currentProduct.category,
+          hasType: !!currentProduct.type,
+          hasPrice: !!currentProduct.price,
+          hasImages: !!(currentProduct.images && currentProduct.images.length > 0),
+          imageCount: currentProduct.images?.length || 0,
+          shop
+        })
       } else {
         // Even without product data, clarify context
+        logger.warn(`No product data available for product page context`, {
+          pageContext,
+          hasCurrentProduct: !!currentProduct,
+          currentProductId: currentProduct?.id,
+          currentProductName: currentProduct?.name,
+          shop
+        })
         contextMessage = `\n\nPAGE CONTEXT: The customer is viewing a specific product page.\n\nCRITICAL CONTEXT RULE: When the customer is on a product page, ANY mention of "this", "this product", "this item", "it", or questions about usage, features, durability, suitability, everyday use, daily use, etc., ALWAYS refers to the CURRENT PRODUCT shown on this page. NEVER ask which product they're referring to - always assume they mean the current product.\n`
       }
       
@@ -893,6 +965,17 @@ export async function POST(request: NextRequest) {
     // Build system prompt with customer name for personalization
     let systemPrompt = buildSystemPrompt(customerName)
     
+    // CRITICAL: If we're on a product page and have product data, emphasize it strongly
+    if (pageContext === "product" && currentProduct && (currentProduct.id || currentProduct.name)) {
+      systemPrompt += `\n\n🔴 CRITICAL: THE CUSTOMER IS VIEWING A SPECIFIC PRODUCT PAGE.\n`
+      systemPrompt += `🔴 PRODUCT DATA IS PROVIDED IN THE CONTEXT MESSAGE BELOW.\n`
+      systemPrompt += `🔴 WHEN THE CUSTOMER ASKS "Tell me more about this product" OR ANY QUESTION ABOUT "this product", "this item", "it", etc.,\n`
+      systemPrompt += `🔴 YOU MUST USE THE PRODUCT INFORMATION PROVIDED IN THE CONTEXT MESSAGE TO ANSWER.\n`
+      systemPrompt += `🔴 DO NOT say you're having trouble accessing product details - THE PRODUCT DATA IS IN THE CONTEXT MESSAGE.\n`
+      systemPrompt += `🔴 DO NOT ask "which product?" - THEY ARE VIEWING THE PRODUCT SHOWN IN THE CONTEXT MESSAGE.\n`
+      systemPrompt += `🔴 PROVIDE DETAILED, SPECIFIC INFORMATION ABOUT THE PRODUCT USING THE DATA PROVIDED.\n\n`
+    }
+    
     // Enhance system prompt based on query intent and available products
     // This ensures Gemini understands what type of response to give
     if (queryIntent) {
@@ -934,6 +1017,19 @@ export async function POST(request: NextRequest) {
         productName: currentProduct.name,
         hasDescription: !!currentProduct.description,
         imageCount: currentProduct.images?.length || 0
+      })
+    }
+    
+    // CRITICAL: Ensure context message is always included, especially for product pages
+    // Log the context message being sent to Gemini for debugging
+    if (pageContext === "product" && isProductInquiry) {
+      logger.info(`Sending product inquiry to Gemini`, {
+        contextMessageLength: contextMessage.length,
+        hasProductData: !!currentProduct,
+        productName: currentProduct?.name,
+        productId: currentProduct?.id,
+        userMessage: userMessage.substring(0, 100),
+        shop
       })
     }
     
