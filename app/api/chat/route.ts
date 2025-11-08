@@ -1955,30 +1955,79 @@ export async function POST(request: NextRequest) {
         ),
       ]) as any
       
+      // Log the raw result for debugging
+      logger.debug("Replicate API raw result", {
+        resultType: typeof result,
+        isAsyncIterator: result && typeof result[Symbol.asyncIterator] === 'function',
+        isString: typeof result === 'string',
+        isArray: Array.isArray(result),
+        hasText: !!result?.text,
+        hasOutput: !!result?.output,
+        resultKeys: result && typeof result === 'object' ? Object.keys(result) : undefined
+      })
+      
       // Replicate returns a stream/iterator, so we need to collect the output
       let fullResponse = ""
       if (result && typeof result[Symbol.asyncIterator] === 'function') {
         // Handle streaming response
+        logger.debug("Processing streaming response from Replicate")
         for await (const chunk of result) {
-          fullResponse += chunk
+          // Handle different chunk formats
+          if (typeof chunk === 'string') {
+            fullResponse += chunk
+          } else if (chunk && typeof chunk === 'object') {
+            // Some Replicate models return objects with text property
+            fullResponse += chunk.text || chunk.output || chunk.content || String(chunk)
+          } else {
+            fullResponse += String(chunk)
+          }
         }
+        logger.debug("Streaming response collected", { length: fullResponse.length })
       } else if (typeof result === 'string') {
         // Handle string response
         fullResponse = result
+        logger.debug("Received string response", { length: fullResponse.length })
       } else if (Array.isArray(result)) {
         // Handle array response
-        fullResponse = result.join('')
-      } else {
+        fullResponse = result.map(chunk => {
+          if (typeof chunk === 'string') return chunk
+          if (chunk && typeof chunk === 'object') {
+            return chunk.text || chunk.output || chunk.content || String(chunk)
+          }
+          return String(chunk)
+        }).join('')
+        logger.debug("Received array response", { length: fullResponse.length, arrayLength: result.length })
+      } else if (result && typeof result === 'object') {
         // Try to extract text from response object
-        fullResponse = result?.text || result?.output || String(result)
+        fullResponse = result.text || result.output || result.content || result.response || String(result)
+        logger.debug("Received object response", { 
+          length: fullResponse.length,
+          hasText: !!result.text,
+          hasOutput: !!result.output,
+          hasContent: !!result.content
+        })
+      } else {
+        // Fallback: convert to string
+        fullResponse = String(result || "")
+        logger.debug("Received unknown format, converted to string", { length: fullResponse.length })
       }
       
       text = fullResponse.trim()
       
       // Validate response
-      if (!text || typeof text !== "string") {
-        throw new Error("Invalid AI response format")
+      if (!text || typeof text !== "string" || text.length === 0) {
+        logger.error("Invalid AI response format", {
+          textLength: text?.length || 0,
+          textType: typeof text,
+          fullResponseLength: fullResponse.length,
+          fullResponseType: typeof fullResponse,
+          resultType: typeof result,
+          resultPreview: result && typeof result === 'object' ? JSON.stringify(result).substring(0, 200) : String(result).substring(0, 200)
+        })
+        throw new Error("Invalid AI response format: empty or non-string response")
       }
+      
+      logger.debug("AI response successfully extracted", { textLength: text.length })
     } catch (aiError) {
       logger.error("AI service error", { 
         error: aiError instanceof Error ? aiError.message : String(aiError) 
