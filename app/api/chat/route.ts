@@ -441,9 +441,6 @@ export async function POST(request: NextRequest) {
                    recoveredProductContext?.id ||
                    currentProduct?.id
     
-    
-    let fetchedProducts: Product[] = []
-    
     // ============ CRITICAL FIX: Use currentProductFromBody as primary source with fallback ============
     let productToFetch: { id?: string; handle?: string } | null = null
     
@@ -642,6 +639,17 @@ export async function POST(request: NextRequest) {
       productUrl = `https://${shopName}.myshopify.com/products/${finalCurrentProduct.id}`
     }
     
+    // Enhanced intent analysis using new productIntelligence module (moved before use)
+    // This provides better intent detection with ticket creation support
+    let enhancedIntent: any = null
+    try {
+      // Convert current product to Shopify format for intent analysis
+      const shopifyCurrentProduct = finalCurrentProduct ? convertToShopifyFormat(finalCurrentProduct) : null
+      enhancedIntent = analyzeUserIntent(message, shopifyCurrentProduct, conversationHistory || [])
+    } catch (error) {
+      // Enhanced intent analysis failed, will use fallback methods
+    }
+    
     // Detect if user is asking for recommendations/search (needs product catalog)
     const isRecommendationQuery = isProductRecommendationQuery(message)
     const needsProductFiltering = shouldFilterProducts(message)
@@ -831,17 +839,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Enhanced intent analysis using new productIntelligence module
-    // This provides better intent detection with ticket creation support
-    let enhancedIntent = null
-    try {
-      // Convert current product to Shopify format for intent analysis
-      const shopifyCurrentProduct = finalCurrentProduct ? convertToShopifyFormat(finalCurrentProduct) : null
-      enhancedIntent = analyzeUserIntent(message, shopifyCurrentProduct, conversationHistory || [])
-    } catch (error) {
-      // Enhanced intent analysis failed, will use fallback methods
-    }
 
+    // Define productLimit at higher scope for use later
+    let productLimit = 10 // Default limit
+    
     // Only filter products when user is asking for recommendations/search
     // This ensures we only send relevant products to LLM, making responses content-aware
     if (shouldFetchProducts && (needsProductFiltering || isLargeCatalog || enhancedIntent?.wantsRecommendations)) {
@@ -874,7 +875,7 @@ export async function POST(request: NextRequest) {
 
         // Retrieve only relevant products (top N based on query intent)
         // RAG: Filter products BEFORE sending to LLM based on query type
-        let productLimit = 10 // Default limit
+        productLimit = 10 // Reset to default limit
         
         if (queryIntent) {
           // Use query intent to determine product limit
@@ -909,7 +910,18 @@ export async function POST(request: NextRequest) {
             )
             
             // Convert back to Product format
-            relevantProducts = convertProductsFromShopifyFormat(smartRecs)
+            // smartRecs is already in Shopify format, so we can convert it
+            relevantProducts = smartRecs.map((sp: any) => ({
+              id: sp.id,
+              name: sp.title || sp.name || '',
+              category: sp.category || sp.productType || '',
+              type: sp.type || sp.productType || '',
+              color: '',
+              price: typeof sp.price === 'object' ? sp.price.min : sp.price || 0,
+              images: sp.images || [],
+              description: sp.description || '',
+              sizes: sp.variants?.map((v: any) => v.title || '').filter(Boolean) || []
+            }))
           } catch (error) {
             // Fallback to filtered products or semantic search
             if (filteredProducts.length > 0) {
@@ -1223,7 +1235,7 @@ export async function POST(request: NextRequest) {
         vendor: undefined,
         available: true,
         tags: [],
-        variants: finalCurrentProduct.sizes?.map(size => ({
+        variants: finalCurrentProduct.sizes?.map((size: string) => ({
           title: size,
           available: true
         })) || [],
@@ -1478,8 +1490,10 @@ export async function POST(request: NextRequest) {
       
       if (isProductInquiry && productUrl && !hasCompleteProductData) {
         // Try to fetch page content as fallback
+        let productPageAnalysis: any = null
         try {
           // Disabled - product page analysis using Google Cloud Gemini API
+          // productPageAnalysis = await analyzeProductPage(productUrl)
         } catch (error) {
           logger.warn("Error in fallback product page analysis", { error })
         }
@@ -1492,24 +1506,24 @@ export async function POST(request: NextRequest) {
         
         if (productPageAnalysis) {
           contextMessage += `✅ PRODUCT PAGE CONTENT (fetched and analyzed):\n`
-        if (productPageAnalysis.summary) {
-          contextMessage += `Summary: ${productPageAnalysis.summary}\n`
-        }
-        if (productPageAnalysis.enhancedDescription) {
+          if (productPageAnalysis.summary) {
+            contextMessage += `Summary: ${productPageAnalysis.summary}\n`
+          }
+          if (productPageAnalysis.enhancedDescription) {
             contextMessage += `Description: ${productPageAnalysis.enhancedDescription}\n`
-        }
-        if (productPageAnalysis.productDetails) {
+          }
+          if (productPageAnalysis.productDetails) {
             contextMessage += `Details: ${productPageAnalysis.productDetails}\n`
-        }
-        if (productPageAnalysis.designElements) {
+          }
+          if (productPageAnalysis.designElements) {
             contextMessage += `Design: ${productPageAnalysis.designElements}\n`
-        }
-        if (productPageAnalysis.materials) {
-          contextMessage += `Materials: ${productPageAnalysis.materials}\n`
-        }
-        if (productPageAnalysis.keyFeatures && productPageAnalysis.keyFeatures.length > 0) {
+          }
+          if (productPageAnalysis.materials) {
+            contextMessage += `Materials: ${productPageAnalysis.materials}\n`
+          }
+          if (productPageAnalysis.keyFeatures && productPageAnalysis.keyFeatures.length > 0) {
             contextMessage += `Features: ${productPageAnalysis.keyFeatures.join(", ")}\n`
-        }
+          }
           contextMessage += `\nUse the information above to provide comprehensive details about "this product".`
         } else {
           // If we couldn't fetch, instruct Gemini to fetch/analyze the URL
