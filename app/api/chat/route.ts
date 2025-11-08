@@ -1923,18 +1923,18 @@ export async function POST(request: NextRequest) {
     //   history: messages.slice(0, -1),
     // })
 
-    // Build conversation history for Replicate API
+    // Build conversation history string for Replicate API
     // Format: Include system instruction, context, and conversation history in the prompt
-    let conversationHistory = ""
+    let conversationHistoryString = ""
     if (history && history.length > 0) {
-      conversationHistory = "\n\nConversation History:\n" + history.map((msg: any) => {
+      conversationHistoryString = "\n\nConversation History:\n" + history.map((msg: any) => {
         const role = msg.role === "user" ? "User" : "Assistant"
         return `${role}: ${msg.content}`
       }).join("\n")
     }
     
     // Build the complete prompt for Replicate
-    const completePrompt = `${fullContext}${conversationHistory}\n\nUser: ${userMessage}\n\nAssistant:`
+    const completePrompt = `${fullContext}${conversationHistoryString}\n\nUser: ${userMessage}\n\nAssistant:`
 
     // Generate response with timeout protection using Replicate API
     let text: string
