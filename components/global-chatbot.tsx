@@ -196,7 +196,7 @@ function recaptureProductContextFromPage(): Product | null {
         id: productData.id || productData.handle || "",
         name: productData.name || "Product",
         url: window.location.href,
-        handle: productData.handle,
+        handle: productData.handle || undefined,
         category: productData.category || "",
         type: productData.type || "",
         color: "",
@@ -510,17 +510,18 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
     
     // Poll for URL changes (fallback for all navigation types)
     // This catches any navigation that doesn't trigger the above events
-    const urlCheckInterval = typeof window !== "undefined" && window.setInterval
-      ? window.setInterval(() => {
-          const currentUrl = window.location.href
-          const lastUrl = (window as any).__lastChatbotUrl
-          
-          if (currentUrl !== lastUrl) {
-            (window as any).__lastChatbotUrl = currentUrl
-            handleNavigation()
-          }
-        }, 500) // Poll every 500ms
-      : null
+    let urlCheckInterval: NodeJS.Timeout | null = null
+    if (typeof window !== "undefined" && window.setInterval) {
+      urlCheckInterval = window.setInterval(() => {
+        const currentUrl = window.location.href
+        const lastUrl = (window as any).__lastChatbotUrl
+        
+        if (currentUrl !== lastUrl) {
+          (window as any).__lastChatbotUrl = currentUrl
+          handleNavigation()
+        }
+      }, 500) // Poll every 500ms
+    }
     
     // Initialize last URL
     (window as any).__lastChatbotUrl = window.location.href
@@ -530,7 +531,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       history.pushState = originalPushState
       history.replaceState = originalReplaceState
       if (urlCheckInterval && typeof window !== "undefined" && window.clearInterval) {
-        window.clearInterval(urlCheckInterval)
+        window.clearInterval(urlCheckInterval as any)
       }
     }
   }, [])
@@ -744,7 +745,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
             id: propProductId,
             name: currentProduct.name || "Product",
             url: propProductUrl,
-            handle: currentProduct.handle,
+            handle: (currentProduct as any).handle || undefined,
             category: currentProduct.category || "",
             type: currentProduct.type || "",
             color: currentProduct.color || "",
@@ -755,12 +756,14 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
           }
           setEffectiveProduct(productToSend)
           persistProductContext(productToSend) // Replace old product with new one
-          logger.info("[Context] Product updated from prop before sending message (new product detected)", { 
-            id: productToSend.id, 
-            name: productToSend.name,
-            previousId: previousId,
-            url: propProductUrl
-          })
+          if (productToSend) {
+            logger.info("[Context] Product updated from prop before sending message (new product detected)", { 
+              id: productToSend.id, 
+              name: productToSend.name,
+              previousId: previousId,
+              url: propProductUrl
+            })
+          }
         }
       }
       
@@ -900,7 +903,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
               // Only send basic identifying info, backend will fetch full details
               name: productToSend.name,
               url: productUrl, // Include product URL for page analysis
-              handle: productToSend.handle, // Include handle for backend lookup
+              handle: productToSend.handle || undefined, // Include handle for backend lookup
             }
           : undefined,
         // No longer sending allProducts - backend will fetch from Shopify
