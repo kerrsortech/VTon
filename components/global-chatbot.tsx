@@ -510,7 +510,8 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
     
     // Poll for URL changes (fallback for all navigation types)
     // This catches any navigation that doesn't trigger the above events
-    let urlCheckInterval: NodeJS.Timeout | null = null
+    // In browser, setInterval returns a number, not NodeJS.Timeout
+    let urlCheckInterval: number | null = null
     if (typeof window !== "undefined" && window.setInterval) {
       urlCheckInterval = window.setInterval(() => {
         const currentUrl = window.location.href
@@ -531,7 +532,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       history.pushState = originalPushState
       history.replaceState = originalReplaceState
       if (urlCheckInterval && typeof window !== "undefined" && window.clearInterval) {
-        window.clearInterval(urlCheckInterval as any)
+        window.clearInterval(urlCheckInterval)
       }
     }
   }, [])
