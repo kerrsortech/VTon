@@ -1966,23 +1966,40 @@ export async function POST(request: NextRequest) {
         resultKeys: result && typeof result === 'object' ? Object.keys(result) : undefined
       })
       
-      // Replicate returns a stream/iterator, so we need to collect the output
+      // Replicate returns a stream/iterator for text models, so we need to collect the output
       let fullResponse = ""
       if (result && typeof result[Symbol.asyncIterator] === 'function') {
         // Handle streaming response
         logger.debug("Processing streaming response from Replicate")
-        for await (const chunk of result) {
-          // Handle different chunk formats
-          if (typeof chunk === 'string') {
-            fullResponse += chunk
-          } else if (chunk && typeof chunk === 'object') {
-            // Some Replicate models return objects with text property
-            fullResponse += chunk.text || chunk.output || chunk.content || String(chunk)
-          } else {
-            fullResponse += String(chunk)
+        try {
+          for await (const chunk of result) {
+            // Handle different chunk formats
+            if (typeof chunk === 'string') {
+              fullResponse += chunk
+            } else if (chunk && typeof chunk === 'object') {
+              // Some Replicate models return objects with text property
+              // Check for common properties: text, output, content, response
+              const chunkText = chunk.text || chunk.output || chunk.content || chunk.response
+              if (chunkText) {
+                fullResponse += typeof chunkText === 'string' ? chunkText : String(chunkText)
+              } else {
+                // If no text property, try to stringify the object
+                fullResponse += JSON.stringify(chunk)
+              }
+            } else if (chunk !== null && chunk !== undefined) {
+              fullResponse += String(chunk)
+            }
+          }
+          logger.debug("Streaming response collected", { length: fullResponse.length })
+        } catch (streamError) {
+          logger.error("Error processing stream", { 
+            error: streamError instanceof Error ? streamError.message : String(streamError) 
+          })
+          // If streaming fails, try to extract from result directly
+          if (result && typeof result === 'object') {
+            fullResponse = result.text || result.output || result.content || result.response || ""
           }
         }
-        logger.debug("Streaming response collected", { length: fullResponse.length })
       } else if (typeof result === 'string') {
         // Handle string response
         fullResponse = result
