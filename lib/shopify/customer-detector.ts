@@ -59,8 +59,17 @@ export function detectShopifyCustomer(): DetectedCustomer {
     const customerAccessToken = getCookie("customer_access_token") || 
                                getCookie("customer_auth_token")
     
-    if (customerMeta || customerAccessToken) {
-      const customerId = customerMeta?.getAttribute("content")
+    // Method 3b: Check __st object (Shopify analytics) - often available even in test accounts
+    let customerIdFromSt: string | undefined = undefined
+    if (typeof (window as any).__st !== "undefined" && (window as any).__st?.cid) {
+      const cid = (window as any).__st.cid
+      if (cid && cid !== "0") {
+        customerIdFromSt = cid.toString()
+      }
+    }
+    
+    if (customerMeta || customerAccessToken || customerIdFromSt) {
+      const customerId = customerMeta?.getAttribute("content") || customerIdFromSt
       return {
         isLoggedIn: true,
         _internal: {
@@ -111,9 +120,12 @@ export function getShopifyCustomerId(): string | null {
       return (window as any).Shopify.customer.id.toString()
     }
     
-    // Method 2: Check __st object (Shopify analytics)
+    // Method 2: Check __st object (Shopify analytics) - often available even in test accounts
     if (typeof (window as any).__st !== "undefined" && (window as any).__st?.cid) {
-      return (window as any).__st.cid.toString()
+      const cid = (window as any).__st.cid
+      if (cid && cid !== "0") {
+        return cid.toString()
+      }
     }
     
     // Method 3: Check meta tag
@@ -125,6 +137,97 @@ export function getShopifyCustomerId(): string | null {
           return customerId
         }
       }
+    }
+    
+    // Method 4: Check cookies for customer ID
+    const customerIdCookie = getCookie("customer_id") || getCookie("shopify_customer_id")
+    if (customerIdCookie && customerIdCookie !== "0") {
+      return customerIdCookie
+    }
+    
+    return null
+  } catch (error) {
+    return null
+  }
+}
+
+/**
+ * Get Shopify customer username (first name + last name)
+ */
+export function getShopifyCustomerUsername(): string | null {
+  if (typeof window === "undefined") return null
+  
+  try {
+    // Method 1: window.Shopify.customer (most reliable)
+    if ((window as any).Shopify?.customer) {
+      const firstName = (window as any).Shopify.customer.first_name || ""
+      const lastName = (window as any).Shopify.customer.last_name || ""
+      const name = `${firstName} ${lastName}`.trim()
+      if (name) {
+        return name
+      }
+    }
+    
+    // Method 2: Check meta tag
+    if (typeof document !== "undefined") {
+      const customerNameMeta = document.querySelector('meta[name="shopify-customer-name"]')
+      if (customerNameMeta) {
+        const customerName = customerNameMeta.getAttribute("content")
+        if (customerName && customerName.trim()) {
+          return customerName.trim()
+        }
+      }
+      
+      // Also check for customer first/last name in separate meta tags
+      const firstNameMeta = document.querySelector('meta[name="shopify-customer-first-name"]')
+      const lastNameMeta = document.querySelector('meta[name="shopify-customer-last-name"]')
+      if (firstNameMeta || lastNameMeta) {
+        const firstName = firstNameMeta?.getAttribute("content") || ""
+        const lastName = lastNameMeta?.getAttribute("content") || ""
+        const name = `${firstName} ${lastName}`.trim()
+        if (name) {
+          return name
+        }
+      }
+    }
+    
+    // Method 3: Check cookie
+    const customerName = getCookie("customer_name")
+    if (customerName && customerName.trim()) {
+      return customerName.trim()
+    }
+    
+    // Method 4: Check localStorage (some themes store customer info here)
+    try {
+      const storedCustomer = localStorage.getItem("shopify_customer")
+      if (storedCustomer) {
+        const customer = JSON.parse(storedCustomer)
+        if (customer) {
+          const firstName = customer.first_name || customer.firstName || ""
+          const lastName = customer.last_name || customer.lastName || ""
+          const name = `${firstName} ${lastName}`.trim()
+          if (name) {
+            return name
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore localStorage errors
+    }
+    
+    // Method 5: Check window.customer or document.customer (theme-specific)
+    try {
+      const themeCustomer = (window as any).customer || (document as any).customer
+      if (themeCustomer) {
+        const firstName = themeCustomer.first_name || themeCustomer.firstName || ""
+        const lastName = themeCustomer.last_name || themeCustomer.lastName || ""
+        const name = `${firstName} ${lastName}`.trim()
+        if (name) {
+          return name
+        }
+      }
+    } catch (e) {
+      // Ignore errors
     }
     
     return null

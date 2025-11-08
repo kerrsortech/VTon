@@ -87,6 +87,32 @@ export function isAccountQuery(message: string): boolean {
 }
 
 /**
+ * Detect if query is about cart information
+ */
+export function isCartQuery(message: string): boolean {
+  const lowerMessage = message.toLowerCase()
+  
+  const cartKeywords = [
+    "cart",
+    "basket",
+    "bag",
+    "my cart",
+    "shopping cart",
+    "items in cart",
+    "what's in my cart",
+    "cart items",
+    "cart contents",
+    "anything in cart",
+    "anything in my cart",
+    "what's in cart",
+    "what's in my basket",
+    "what's in my bag",
+  ]
+  
+  return cartKeywords.some((keyword) => lowerMessage.includes(keyword))
+}
+
+/**
  * Extract order number from message (e.g., "#1001", "1001", "order 1001")
  */
 export function extractOrderNumber(message: string): string | null {
@@ -124,6 +150,7 @@ export interface QueryType {
   isOrder: boolean
   isPolicy: boolean
   isAccount: boolean
+  isCart: boolean
   orderNumber: string | null
   email: string | null
 }
@@ -133,6 +160,7 @@ export function detectQueryType(message: string): QueryType {
     isOrder: isOrderQuery(message),
     isPolicy: isPolicyQuery(message),
     isAccount: isAccountQuery(message),
+    isCart: isCartQuery(message),
     orderNumber: extractOrderNumber(message),
     email: extractEmail(message),
   }

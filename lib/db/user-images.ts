@@ -29,6 +29,7 @@ export interface UserImage {
   id?: number
   userId: string
   shopifyCustomerId?: string | null
+  username?: string | null
   imageType: "fullBody" | "halfBody"
   imageUrl: string
   blobFilename: string
@@ -99,30 +100,33 @@ export async function saveUserImage(image: UserImage): Promise<void> {
   if (db.client === "neon") {
     // Neon serverless client using tagged template literals
     await db.sql`
-      INSERT INTO user_images (user_id, shopify_customer_id, image_type, image_url, blob_filename, updated_at)
-      VALUES (${image.userId}, ${image.shopifyCustomerId || null}, ${image.imageType}, ${image.imageUrl}, ${image.blobFilename}, NOW())
+      INSERT INTO user_images (user_id, shopify_customer_id, username, image_type, image_url, blob_filename, updated_at)
+      VALUES (${image.userId}, ${image.shopifyCustomerId || null}, ${image.username || null}, ${image.imageType}, ${image.imageUrl}, ${image.blobFilename}, NOW())
       ON CONFLICT (user_id, image_type)
       DO UPDATE SET
         image_url = EXCLUDED.image_url,
         blob_filename = EXCLUDED.blob_filename,
         shopify_customer_id = COALESCE(EXCLUDED.shopify_customer_id, user_images.shopify_customer_id),
+        username = COALESCE(EXCLUDED.username, user_images.username),
         updated_at = NOW()
     `
   } else {
     // Postgres pool (parameterized query for security)
     const query = `
-      INSERT INTO user_images (user_id, shopify_customer_id, image_type, image_url, blob_filename, updated_at)
-      VALUES ($1, $2, $3, $4, $5, NOW())
+      INSERT INTO user_images (user_id, shopify_customer_id, username, image_type, image_url, blob_filename, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
       ON CONFLICT (user_id, image_type)
       DO UPDATE SET
         image_url = EXCLUDED.image_url,
         blob_filename = EXCLUDED.blob_filename,
         shopify_customer_id = COALESCE(EXCLUDED.shopify_customer_id, user_images.shopify_customer_id),
+        username = COALESCE(EXCLUDED.username, user_images.username),
         updated_at = NOW()
     `
     await db.pool.query(query, [
       image.userId,
       image.shopifyCustomerId || null,
+      image.username || null,
       image.imageType,
       image.imageUrl,
       image.blobFilename,

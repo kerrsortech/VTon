@@ -162,9 +162,35 @@
     // Initialize backend
     initializeBackend();
 
-    // Initial greeting
+    // Initial greeting - start with default, then try to personalize
     state.messages = [{ role: 'assistant', content: 'How may I help you?' }];
     renderMessages();
+    
+    // Try to personalize greeting asynchronously (with retries)
+    // This handles cases where Shopify customer object loads after page load
+    (async function tryPersonalizeGreeting(retries = 3, delay = 500) {
+      for (let i = 0; i < retries; i++) {
+        // Wait before checking (give time for Shopify to load)
+        await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
+        
+        // Try to get customer name from Shopify
+        const customerName = getShopifyCustomerUsername();
+        
+        if (customerName && customerName.trim()) {
+          // Use first name if full name contains space, otherwise use full name
+          const firstName = customerName.split(' ')[0].trim();
+          if (firstName) {
+            // Update greeting with personalized name
+            if (state.messages.length === 1 && state.messages[0].content === 'How may I help you?') {
+              state.messages[0].content = `Hi ${firstName}, how may I help you?`;
+              renderMessages();
+              console.log('✅ Personalized greeting updated:', firstName);
+              return; // Success, stop retrying
+            }
+          }
+        }
+      }
+    })();
     
     // Show prompt templates on first load
     renderPromptTemplates();
@@ -229,6 +255,42 @@
     }
     
     return null;
+  }
+
+  // Helper function to get Shopify customer username (first name + last name)
+  function getShopifyCustomerUsername() {
+    if (typeof window === 'undefined') return null;
+    
+    try {
+      // Method 1: window.Shopify.customer (most reliable)
+      if (window.Shopify?.customer) {
+        const firstName = window.Shopify.customer.first_name || '';
+        const lastName = window.Shopify.customer.last_name || '';
+        const name = `${firstName} ${lastName}`.trim();
+        return name || null;
+      }
+      
+      // Method 2: Check meta tag
+      if (typeof document !== 'undefined') {
+        const customerNameMeta = document.querySelector('meta[name="shopify-customer-name"]');
+        if (customerNameMeta) {
+          const customerName = customerNameMeta.getAttribute('content');
+          if (customerName) {
+            return customerName;
+          }
+        }
+      }
+      
+      // Method 3: Check cookie
+      const customerName = getCookie('customer_name');
+      if (customerName) {
+        return customerName;
+      }
+      
+      return null;
+    } catch (error) {
+      return null;
+    }
   }
 
   // Fetch and store user images from server

@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils"
 import type { Product, TryOnResult } from "@/lib/closelook-types"
 import { useCloselook } from "@/components/closelook-provider"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { getShopifyCustomerId } from "@/lib/shopify/customer-detector"
+import { getShopifyCustomerId, getShopifyCustomerUsername } from "@/lib/shopify/customer-detector"
 
 // Client-side logger (simple console logger for browser)
 const logger = {
@@ -22,6 +22,18 @@ const logger = {
 
 // Import Link wrapper that works in both Next.js and widget contexts
 import { Link as NextLink } from "@/components/link-wrapper"
+
+// Helper function to get cookie value
+function getCookie(name: string): string | null {
+  if (typeof document === "undefined") return null
+  
+  const value = `; ${document.cookie}`
+  const parts = value.split(`; ${name}=`)
+  if (parts.length === 2) {
+    return parts.pop()?.split(";").shift() || null
+  }
+  return null
+}
 
 interface Message {
   role: "user" | "assistant"
@@ -594,8 +606,66 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
   // Products will be available in recommendations from chat API responses
 
   useEffect(() => {
-    // Initialize with greeting message
+    // Initialize with default greeting first
     setMessages([{ role: "assistant", content: "How may I help you?" }])
+    
+    // Try to personalize greeting asynchronously (with retries)
+    // This handles cases where Shopify customer object loads after page load
+    const tryPersonalizeGreeting = async (retries = 5, delay = 500) => {
+      for (let i = 0; i < retries; i++) {
+        // Wait before checking (give time for Shopify to load)
+        await new Promise(resolve => setTimeout(resolve, delay * (i + 1)))
+        
+        // Try to get customer name from Shopify
+        const customerName = typeof window !== "undefined" 
+          ? getShopifyCustomerUsername()
+          : null
+        
+        // Debug logging
+        if (typeof window !== "undefined") {
+          const shopify = (window as any).Shopify
+          const customerNameFromCookie = getCookie("customer_name")
+          const customerNameFromMeta = document.querySelector('meta[name="shopify-customer-name"]')?.getAttribute("content")
+          const stCid = (window as any).__st?.cid
+          const customerId = getShopifyCustomerId()
+          
+          console.log("[Chatbot] Customer detection attempt", {
+            attempt: i + 1,
+            hasShopify: !!shopify,
+            hasCustomer: !!shopify?.customer,
+            customerName: customerName || "not found",
+            customerId: customerId || "not found",
+            shopifyCustomerId: shopify?.customer?.id || "not found",
+            stCid: stCid || "not found",
+            customerEmail: shopify?.customer?.email || "not found",
+            customerNameFromCookie: customerNameFromCookie || "not found",
+            customerNameFromMeta: customerNameFromMeta || "not found",
+          })
+        }
+        
+        if (customerName && customerName.trim()) {
+          // Use first name if full name contains space, otherwise use full name
+          const firstName = customerName.split(' ')[0].trim()
+          if (firstName) {
+            // Update greeting with personalized name
+            setMessages(prev => {
+              // Only update if we still have the default greeting
+              if (prev.length === 1 && prev[0].content === "How may I help you?") {
+                return [{ role: "assistant", content: `Hi ${firstName}, how may I help you?` }]
+              }
+              return prev
+            })
+            logger.info("Personalized greeting updated", { firstName, fullName: customerName })
+            return // Success, stop retrying
+          }
+        }
+      }
+      
+      logger.debug("Failed to personalize greeting after all retries")
+    }
+    
+    // Start trying to personalize after a short delay
+    tryPersonalizeGreeting()
   }, [])
 
   // Auto-scroll to bottom when messages change or loading state changes
@@ -887,6 +957,8 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       }
 
       // ============ CRITICAL FIX: Build payload with smart product context ============
+      // NOTE: Cart and order information will be fetched by backend only when user asks about them
+      // Frontend should not fetch cart automatically - backend handles this based on query type
       const payload = {
         message: userMessage,
         conversationHistory: messages.map((m) => ({
@@ -910,6 +982,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
         // No longer sending allProducts - backend will fetch from Shopify
         // This keeps widget lightweight (UI + basic tracking only)
         allProducts: undefined,
+        // Cart will be fetched by backend only when user asks about it
       }
 
       // ============ CRITICAL FIX: Log payload for debugging ============
@@ -940,6 +1013,26 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       // Validate response data
       if (!data || typeof data.message !== "string") {
         throw new Error("Invalid response format from server")
+      }
+
+      // Check if we got customer info from the API and update greeting if needed
+      // This happens when the user sends their first message
+      if (data.customer?.name) {
+        const firstName = data.customer.name.split(' ')[0].trim()
+        if (firstName) {
+          setMessages((prev) => {
+            // Check if we still have the default greeting and this is the first user message
+            if (prev.length === 1 && prev[0].role === "assistant" && prev[0].content === "How may I help you?") {
+              // Replace the default greeting with personalized one
+              return [
+                { role: "assistant", content: `Hi ${firstName}, how may I help you?` },
+                ...prev.slice(1), // Keep any other messages
+              ]
+            }
+            return prev
+          })
+          logger.info("Personalized greeting updated from API response", { firstName, fullName: data.customer.name })
+        }
       }
 
       setMessages((prev) => [
@@ -1156,9 +1249,63 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
     await handleTryOnWithUrls(images)
   }
 
-  const handleUploadClick = () => {
+  const handleUploadClick = async () => {
     if (!isGenerating) {
       setIsUploadDialogOpen(true)
+      
+      // Fetch saved images when dialog opens
+      await fetchSavedImages()
+    }
+  }
+
+  // Fetch saved images from database
+  const fetchSavedImages = async () => {
+    try {
+      const shopifyCustomerId = getShopifyCustomerId()
+      if (!shopifyCustomerId) {
+        // User not logged in, clear any existing previews
+        setFullBodyPreview(null)
+        setHalfBodyPreview(null)
+        return
+      }
+
+      const headers: HeadersInit = {
+        "x-shopify-customer-id": shopifyCustomerId,
+      }
+
+      const response = await fetch("/api/user-images", {
+        method: "GET",
+        headers,
+        credentials: "include",
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        if (result.images) {
+          // Set previews from saved images
+          if (result.images.fullBodyUrl) {
+            setFullBodyPreview(result.images.fullBodyUrl)
+          }
+          if (result.images.halfBodyUrl) {
+            setHalfBodyPreview(result.images.halfBodyUrl)
+          }
+          
+          // Update context with saved images
+          setUserImages({
+            fullBodyUrl: result.images.fullBodyUrl,
+            halfBodyUrl: result.images.halfBodyUrl,
+          })
+          
+          logger.info("Saved images fetched and displayed", {
+            hasFullBody: !!result.images.fullBodyUrl,
+            hasHalfBody: !!result.images.halfBodyUrl,
+          })
+        }
+      } else {
+        logger.warn("Failed to fetch saved images", { status: response.status })
+      }
+    } catch (error) {
+      logger.error("Error fetching saved images", { error })
     }
   }
 
@@ -1178,8 +1325,9 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       await handleTryOnWithUrls(userImages)
     } else {
       logger.info("Try-on clicked without images, opening upload dialog")
-      // No images saved yet, open upload dialog
+      // No images saved yet, open upload dialog and fetch saved images
       setIsUploadDialogOpen(true)
+      await fetchSavedImages()
     }
   }
 
@@ -1223,12 +1371,20 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
         uploadFormData.append("halfBodyPhoto", halfBodyPhoto)
       }
 
-      // Get request headers including Shopify customer ID if available
+      // Get request headers including Shopify customer ID and username (REQUIRED)
       const uploadHeaders: HeadersInit = {}
       if (typeof window !== "undefined") {
         const shopifyCustomerId = getShopifyCustomerId()
-        if (shopifyCustomerId) {
-          uploadHeaders["x-shopify-customer-id"] = shopifyCustomerId
+        const shopifyCustomerUsername = getShopifyCustomerUsername()
+        
+        if (!shopifyCustomerId) {
+          setUploadError("Please log in to your Shopify account to upload images. Only logged-in users can upload photos.")
+          return
+        }
+        
+        uploadHeaders["x-shopify-customer-id"] = shopifyCustomerId
+        if (shopifyCustomerUsername) {
+          uploadHeaders["x-shopify-customer-username"] = shopifyCustomerUsername
         }
       }
 
@@ -1274,11 +1430,10 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       // Close upload dialog
       setIsUploadDialogOpen(false)
       
-      // Reset upload dialog state
+      // Reset upload dialog state (but keep previews from saved images)
       setFullBodyPhoto(null)
       setHalfBodyPhoto(null)
-      setFullBodyPreview(null)
-      setHalfBodyPreview(null)
+      // Don't reset previews - they will be fetched from saved images next time dialog opens
 
       // Show success message
       setMessages((prev) => [
@@ -1302,9 +1457,19 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
     if (type === "fullBody") {
       setFullBodyPhoto(null)
       setFullBodyPreview(null)
+      // Also clear from context
+      setUserImages({
+        ...userImages,
+        fullBodyUrl: undefined,
+      })
     } else {
       setHalfBodyPhoto(null)
       setHalfBodyPreview(null)
+      // Also clear from context
+      setUserImages({
+        ...userImages,
+        halfBodyUrl: undefined,
+      })
     }
   }
 

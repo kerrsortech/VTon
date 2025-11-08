@@ -17788,6 +17788,283 @@ module.exports = insertBySelector;
 
 /***/ }),
 
+/***/ 691:
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+
+// EXPORTS
+__webpack_require__.d(__webpack_exports__, {
+  detectShopifyCustomer: () => (/* binding */ detectShopifyCustomer),
+  u: () => (/* binding */ getShopifyCustomerId)
+});
+
+;// ../../lib/server-logger.ts
+/**
+ * Server-side Logger
+ * Secure logging utility that hides third-party API details
+ * and only exposes business-level information
+ */
+class ServerLogger {
+    constructor() {
+        this.isDevelopment = "production" === "development";
+        this.enableStructuredLogging = process.env.ENABLE_STRUCTURED_LOGGING === "true";
+    }
+    sanitizeMessage(message) {
+        // Remove references to third-party APIs
+        const apiPatterns = [
+            /Google\s*(Gen|Generative)*AI/gi,
+            /Gemini\s*API/gi,
+            /Replicate\s*API/gi,
+            /SeeDream/gi,
+            /seedream/gi,
+            /gemini-2\.0-flash-exp/gi,
+            /gemini-2\.5-flash-image/gi,
+            /bytedance\//gi,
+        ];
+        let sanitized = message;
+        for (const pattern of apiPatterns) {
+            sanitized = sanitized.replace(pattern, "[AI Engine]");
+        }
+        return sanitized;
+    }
+    sanitizeContext(context) {
+        if (!context)
+            return context;
+        const sanitized = { ...context };
+        // Remove API keys and sensitive data
+        const sensitiveKeys = ["apiKey", "api_token", "token", "auth", "key", "secret"];
+        for (const key of sensitiveKeys) {
+            if (sanitized[key]) {
+                sanitized[key] = "[REDACTED]";
+            }
+        }
+        // Sanitize error messages
+        if (sanitized.error) {
+            sanitized.error = this.sanitizeError(sanitized.error);
+        }
+        // Sanitize message strings
+        if (typeof sanitized.message === "string") {
+            sanitized.message = this.sanitizeMessage(sanitized.message);
+        }
+        return sanitized;
+    }
+    sanitizeError(error) {
+        if (typeof error === "string") {
+            return this.sanitizeMessage(error);
+        }
+        if (error instanceof Error) {
+            const sanitizedError = new Error(this.sanitizeMessage(error.message));
+            sanitizedError.name = error.name;
+            return sanitizedError;
+        }
+        return error;
+    }
+    log(level, message, context) {
+        const sanitizedMessage = this.sanitizeMessage(message);
+        const sanitizedContext = context ? this.sanitizeContext(context) : undefined;
+        // Always log - server-side console logs are safe (clients never see these)
+        // Logs go to the terminal/server logs, not to the browser console
+        const timestamp = new Date().toISOString();
+        // Optionally use structured JSON logging for better parsing in production
+        if (this.enableStructuredLogging) {
+            const structuredLog = {
+                timestamp,
+                level: level.toUpperCase(),
+                message: sanitizedMessage,
+                ...sanitizedContext,
+            };
+            console[level](JSON.stringify(structuredLog));
+        }
+        else {
+            console[level](`[${timestamp}] [Closelook Server] ${sanitizedMessage}`, sanitizedContext || "");
+        }
+    }
+    info(message, context) {
+        this.log("info", message, context);
+    }
+    warn(message, context) {
+        this.log("warn", message, context);
+    }
+    error(message, context) {
+        this.log("error", message, context);
+    }
+    debug(message, context) {
+        // Only show debug logs in development to reduce noise in production
+        if (this.isDevelopment) {
+            this.log("debug", message, context);
+        }
+    }
+}
+// Export singleton instance
+const logger = new ServerLogger();
+/**
+ * Sanitizes error responses before sending to client
+ */
+function sanitizeErrorForClient(error, requestId) {
+    const errorDetails = error instanceof Error ? error.message : String(error);
+    const sanitizedDetails = logger.sanitizeMessage(errorDetails);
+    // Don't expose quota or API-specific errors to clients
+    const sanitizedError = sanitizedDetails
+        .replace(/quota/i, "rate limit")
+        .replace(/429/i, "rate limit")
+        .replace(/exceeded/i, "limit reached")
+        .replace(/replicate/i, "[Processing Service]")
+        .replace(/gemini/i, "[AI Service]")
+        .replace(/seedream/i, "[Generation Model]")
+        .replace(/bytedance/i, "");
+    // Determine generic error type
+    let errorType = "PROCESSING_ERROR";
+    if (sanitizedDetails.toLowerCase().includes("rate limit") || sanitizedDetails.includes("429")) {
+        errorType = "RATE_LIMIT_EXCEEDED";
+    }
+    else if (sanitizedDetails.toLowerCase().includes("timeout")) {
+        errorType = "REQUEST_TIMEOUT";
+    }
+    else if (sanitizedDetails.toLowerCase().includes("validation") || sanitizedDetails.toLowerCase().includes("invalid")) {
+        errorType = "VALIDATION_ERROR";
+    }
+    const isDevelopment = "production" === "development";
+    return {
+        error: errorType === "RATE_LIMIT_EXCEEDED"
+            ? "Service temporarily unavailable. Please try again in a moment."
+            : "Failed to process request",
+        errorType,
+        details: isDevelopment ? sanitizedError : undefined,
+        requestId,
+    };
+}
+// Export the class for advanced usage if needed
+
+
+;// ../../lib/shopify/customer-detector.ts
+/**
+ * Helper to detect customer context from Shopify storefront
+ * Checks for customer information in Shopify storefront context
+ */
+
+/**
+ * Detect customer from Shopify storefront context
+ * Checks for window.Shopify.customer or customer access token
+ */
+function detectShopifyCustomer() {
+    if (typeof window === "undefined") {
+        return { isLoggedIn: false };
+    }
+    try {
+        // Method 1: Check window.Shopify.customer (if available)
+        const shopify = window.Shopify;
+        if (shopify?.customer) {
+            const firstName = shopify.customer.first_name;
+            const lastName = shopify.customer.last_name;
+            const name = firstName || lastName ? `${firstName || ""} ${lastName || ""}`.trim() : undefined;
+            return {
+                name: name || undefined,
+                isLoggedIn: !!shopify.customer.email,
+                _internal: {
+                    id: shopify.customer.id?.toString(),
+                    email: shopify.customer.email,
+                },
+            };
+        }
+        // Method 2: Check for customer name from cookies or meta tags
+        const customerName = getCookie("customer_name") ||
+            document.querySelector('meta[name="shopify-customer-name"]')?.getAttribute("content");
+        if (customerName) {
+            return {
+                name: customerName,
+                isLoggedIn: true,
+            };
+        }
+        // Method 3: Check for customer ID in meta tags (if present) - for internal use only
+        const customerMeta = document.querySelector('meta[name="shopify-customer-id"]');
+        const customerAccessToken = getCookie("customer_access_token") ||
+            getCookie("customer_auth_token");
+        if (customerMeta || customerAccessToken) {
+            const customerId = customerMeta?.getAttribute("content");
+            return {
+                isLoggedIn: true,
+                _internal: {
+                    id: customerId || undefined,
+                    accessToken: customerAccessToken || undefined,
+                },
+            };
+        }
+        // Method 4: Check document for customer data in Shopify theme
+        try {
+            const themeCustomer = window.customer || document.customer;
+            if (themeCustomer) {
+                const firstName = themeCustomer.first_name || themeCustomer.firstName;
+                const lastName = themeCustomer.last_name || themeCustomer.lastName;
+                const name = firstName || lastName ? `${firstName || ""} ${lastName || ""}`.trim() : undefined;
+                return {
+                    name: name || undefined,
+                    isLoggedIn: !!(themeCustomer.email || themeCustomer.id),
+                    _internal: {
+                        id: themeCustomer.id?.toString(),
+                        email: themeCustomer.email,
+                    },
+                };
+            }
+        }
+        catch (e) {
+            // Ignore errors
+        }
+        return { isLoggedIn: false };
+    }
+    catch (error) {
+        logger.debug("Error detecting Shopify customer", { error: error instanceof Error ? error.message : String(error) });
+        return { isLoggedIn: false };
+    }
+}
+/**
+ * Get Shopify customer ID from multiple sources
+ * This is a more robust method that checks multiple locations where Shopify stores customer ID
+ */
+function getShopifyCustomerId() {
+    if (typeof window === "undefined")
+        return null;
+    try {
+        // Method 1: window.Shopify.customer (most reliable)
+        if (window.Shopify?.customer?.id) {
+            return window.Shopify.customer.id.toString();
+        }
+        // Method 2: Check __st object (Shopify analytics)
+        if (typeof window.__st !== "undefined" && window.__st?.cid) {
+            return window.__st.cid.toString();
+        }
+        // Method 3: Check meta tag
+        if (typeof document !== "undefined") {
+            const customerMeta = document.querySelector('meta[name="customer-id"], meta[name="shopify-customer-id"]');
+            if (customerMeta) {
+                const customerId = customerMeta.getAttribute("content");
+                if (customerId && customerId !== "0") {
+                    return customerId;
+                }
+            }
+        }
+        return null;
+    }
+    catch (error) {
+        return null;
+    }
+}
+/**
+ * Get cookie value by name
+ */
+function getCookie(name) {
+    if (typeof document === "undefined")
+        return null;
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) {
+        return parts.pop()?.split(";").shift() || null;
+    }
+    return null;
+}
+
+
+/***/ }),
+
 /***/ 825:
 /***/ ((module) => {
 
@@ -18587,9 +18864,6 @@ if (true) {
 /******/ 		return module.exports;
 /******/ 	}
 /******/ 	
-/******/ 	// expose the modules object (__webpack_modules__)
-/******/ 	__webpack_require__.m = __webpack_modules__;
-/******/ 	
 /************************************************************************/
 /******/ 	/* webpack/runtime/compat get default export */
 /******/ 	(() => {
@@ -18645,88 +18919,9 @@ if (true) {
 /******/ 		};
 /******/ 	})();
 /******/ 	
-/******/ 	/* webpack/runtime/ensure chunk */
-/******/ 	(() => {
-/******/ 		__webpack_require__.f = {};
-/******/ 		// This file contains only the entry chunk.
-/******/ 		// The chunk loading function for additional chunks
-/******/ 		__webpack_require__.e = (chunkId) => {
-/******/ 			return Promise.all(Object.keys(__webpack_require__.f).reduce((promises, key) => {
-/******/ 				__webpack_require__.f[key](chunkId, promises);
-/******/ 				return promises;
-/******/ 			}, []));
-/******/ 		};
-/******/ 	})();
-/******/ 	
-/******/ 	/* webpack/runtime/get javascript chunk filename */
-/******/ 	(() => {
-/******/ 		// This function allow to reference async chunks
-/******/ 		__webpack_require__.u = (chunkId) => {
-/******/ 			// return url for filenames based on template
-/******/ 			return "" + chunkId + ".chatbot-widget.js";
-/******/ 		};
-/******/ 	})();
-/******/ 	
-/******/ 	/* webpack/runtime/global */
-/******/ 	(() => {
-/******/ 		__webpack_require__.g = (function() {
-/******/ 			if (typeof globalThis === 'object') return globalThis;
-/******/ 			try {
-/******/ 				return this || new Function('return this')();
-/******/ 			} catch (e) {
-/******/ 				if (typeof window === 'object') return window;
-/******/ 			}
-/******/ 		})();
-/******/ 	})();
-/******/ 	
 /******/ 	/* webpack/runtime/hasOwnProperty shorthand */
 /******/ 	(() => {
 /******/ 		__webpack_require__.o = (obj, prop) => (Object.prototype.hasOwnProperty.call(obj, prop))
-/******/ 	})();
-/******/ 	
-/******/ 	/* webpack/runtime/load script */
-/******/ 	(() => {
-/******/ 		var inProgress = {};
-/******/ 		var dataWebpackPrefix = "CloselookChatbotWidget:";
-/******/ 		// loadScript function to load a script via script tag
-/******/ 		__webpack_require__.l = (url, done, key, chunkId) => {
-/******/ 			if(inProgress[url]) { inProgress[url].push(done); return; }
-/******/ 			var script, needAttach;
-/******/ 			if(key !== undefined) {
-/******/ 				var scripts = document.getElementsByTagName("script");
-/******/ 				for(var i = 0; i < scripts.length; i++) {
-/******/ 					var s = scripts[i];
-/******/ 					if(s.getAttribute("src") == url || s.getAttribute("data-webpack") == dataWebpackPrefix + key) { script = s; break; }
-/******/ 				}
-/******/ 			}
-/******/ 			if(!script) {
-/******/ 				needAttach = true;
-/******/ 				script = document.createElement('script');
-/******/ 		
-/******/ 				script.charset = 'utf-8';
-/******/ 				if (__webpack_require__.nc) {
-/******/ 					script.setAttribute("nonce", __webpack_require__.nc);
-/******/ 				}
-/******/ 				script.setAttribute("data-webpack", dataWebpackPrefix + key);
-/******/ 		
-/******/ 				script.src = url;
-/******/ 			}
-/******/ 			inProgress[url] = [done];
-/******/ 			var onScriptComplete = (prev, event) => {
-/******/ 				// avoid mem leaks in IE.
-/******/ 				script.onerror = script.onload = null;
-/******/ 				clearTimeout(timeout);
-/******/ 				var doneFns = inProgress[url];
-/******/ 				delete inProgress[url];
-/******/ 				script.parentNode && script.parentNode.removeChild(script);
-/******/ 				doneFns && doneFns.forEach((fn) => (fn(event)));
-/******/ 				if(prev) return prev(event);
-/******/ 			}
-/******/ 			var timeout = setTimeout(onScriptComplete.bind(null, undefined, { type: 'timeout', target: script }), 120000);
-/******/ 			script.onerror = onScriptComplete.bind(null, script.onerror);
-/******/ 			script.onload = onScriptComplete.bind(null, script.onload);
-/******/ 			needAttach && document.head.appendChild(script);
-/******/ 		};
 /******/ 	})();
 /******/ 	
 /******/ 	/* webpack/runtime/make namespace object */
@@ -18738,119 +18933,6 @@ if (true) {
 /******/ 			}
 /******/ 			Object.defineProperty(exports, '__esModule', { value: true });
 /******/ 		};
-/******/ 	})();
-/******/ 	
-/******/ 	/* webpack/runtime/publicPath */
-/******/ 	(() => {
-/******/ 		var scriptUrl;
-/******/ 		if (__webpack_require__.g.importScripts) scriptUrl = __webpack_require__.g.location + "";
-/******/ 		var document = __webpack_require__.g.document;
-/******/ 		if (!scriptUrl && document) {
-/******/ 			if (document.currentScript && document.currentScript.tagName.toUpperCase() === 'SCRIPT')
-/******/ 				scriptUrl = document.currentScript.src;
-/******/ 			if (!scriptUrl) {
-/******/ 				var scripts = document.getElementsByTagName("script");
-/******/ 				if(scripts.length) {
-/******/ 					var i = scripts.length - 1;
-/******/ 					while (i > -1 && (!scriptUrl || !/^http(s?):/.test(scriptUrl))) scriptUrl = scripts[i--].src;
-/******/ 				}
-/******/ 			}
-/******/ 		}
-/******/ 		// When supporting browsers where an automatic publicPath is not supported you must specify an output.publicPath manually via configuration
-/******/ 		// or pass an empty string ("") and set the __webpack_public_path__ variable from your code to use your own logic.
-/******/ 		if (!scriptUrl) throw new Error("Automatic publicPath is not supported in this browser");
-/******/ 		scriptUrl = scriptUrl.replace(/^blob:/, "").replace(/#.*$/, "").replace(/\?.*$/, "").replace(/\/[^\/]+$/, "/");
-/******/ 		__webpack_require__.p = scriptUrl;
-/******/ 	})();
-/******/ 	
-/******/ 	/* webpack/runtime/jsonp chunk loading */
-/******/ 	(() => {
-/******/ 		// no baseURI
-/******/ 		
-/******/ 		// object to store loaded and loading chunks
-/******/ 		// undefined = chunk not loaded, null = chunk preloaded/prefetched
-/******/ 		// [resolve, reject, Promise] = chunk loading, 0 = chunk loaded
-/******/ 		var installedChunks = {
-/******/ 			792: 0
-/******/ 		};
-/******/ 		
-/******/ 		__webpack_require__.f.j = (chunkId, promises) => {
-/******/ 				// JSONP chunk loading for javascript
-/******/ 				var installedChunkData = __webpack_require__.o(installedChunks, chunkId) ? installedChunks[chunkId] : undefined;
-/******/ 				if(installedChunkData !== 0) { // 0 means "already installed".
-/******/ 		
-/******/ 					// a Promise means "currently loading".
-/******/ 					if(installedChunkData) {
-/******/ 						promises.push(installedChunkData[2]);
-/******/ 					} else {
-/******/ 						if(true) { // all chunks have JS
-/******/ 							// setup Promise in chunk cache
-/******/ 							var promise = new Promise((resolve, reject) => (installedChunkData = installedChunks[chunkId] = [resolve, reject]));
-/******/ 							promises.push(installedChunkData[2] = promise);
-/******/ 		
-/******/ 							// start chunk loading
-/******/ 							var url = __webpack_require__.p + __webpack_require__.u(chunkId);
-/******/ 							// create error before stack unwound to get useful stacktrace later
-/******/ 							var error = new Error();
-/******/ 							var loadingEnded = (event) => {
-/******/ 								if(__webpack_require__.o(installedChunks, chunkId)) {
-/******/ 									installedChunkData = installedChunks[chunkId];
-/******/ 									if(installedChunkData !== 0) installedChunks[chunkId] = undefined;
-/******/ 									if(installedChunkData) {
-/******/ 										var errorType = event && (event.type === 'load' ? 'missing' : event.type);
-/******/ 										var realSrc = event && event.target && event.target.src;
-/******/ 										error.message = 'Loading chunk ' + chunkId + ' failed.\n(' + errorType + ': ' + realSrc + ')';
-/******/ 										error.name = 'ChunkLoadError';
-/******/ 										error.type = errorType;
-/******/ 										error.request = realSrc;
-/******/ 										installedChunkData[1](error);
-/******/ 									}
-/******/ 								}
-/******/ 							};
-/******/ 							__webpack_require__.l(url, loadingEnded, "chunk-" + chunkId, chunkId);
-/******/ 						}
-/******/ 					}
-/******/ 				}
-/******/ 		};
-/******/ 		
-/******/ 		// no prefetching
-/******/ 		
-/******/ 		// no preloaded
-/******/ 		
-/******/ 		// no HMR
-/******/ 		
-/******/ 		// no HMR manifest
-/******/ 		
-/******/ 		// no on chunks loaded
-/******/ 		
-/******/ 		// install a JSONP callback for chunk loading
-/******/ 		var webpackJsonpCallback = (parentChunkLoadingFunction, data) => {
-/******/ 			var [chunkIds, moreModules, runtime] = data;
-/******/ 			// add "moreModules" to the modules object,
-/******/ 			// then flag all "chunkIds" as loaded and fire callback
-/******/ 			var moduleId, chunkId, i = 0;
-/******/ 			if(chunkIds.some((id) => (installedChunks[id] !== 0))) {
-/******/ 				for(moduleId in moreModules) {
-/******/ 					if(__webpack_require__.o(moreModules, moduleId)) {
-/******/ 						__webpack_require__.m[moduleId] = moreModules[moduleId];
-/******/ 					}
-/******/ 				}
-/******/ 				if(runtime) var result = runtime(__webpack_require__);
-/******/ 			}
-/******/ 			if(parentChunkLoadingFunction) parentChunkLoadingFunction(data);
-/******/ 			for(;i < chunkIds.length; i++) {
-/******/ 				chunkId = chunkIds[i];
-/******/ 				if(__webpack_require__.o(installedChunks, chunkId) && installedChunks[chunkId]) {
-/******/ 					installedChunks[chunkId][0]();
-/******/ 				}
-/******/ 				installedChunks[chunkId] = 0;
-/******/ 			}
-/******/ 		
-/******/ 		}
-/******/ 		
-/******/ 		var chunkLoadingGlobal = self["webpackChunkCloselookChatbotWidget"] = self["webpackChunkCloselookChatbotWidget"] || [];
-/******/ 		chunkLoadingGlobal.forEach(webpackJsonpCallback.bind(null, 0));
-/******/ 		chunkLoadingGlobal.push = webpackJsonpCallback.bind(null, chunkLoadingGlobal.push.bind(chunkLoadingGlobal));
 /******/ 	})();
 /******/ 	
 /******/ 	/* webpack/runtime/nonce */
@@ -25317,6 +25399,8 @@ function dialog_DialogDescription({ className, ...props }) {
 }
 
 
+// EXTERNAL MODULE: ../../lib/shopify/customer-detector.ts + 1 modules
+var customer_detector = __webpack_require__(691);
 ;// ../../components/link-wrapper.tsx
 /**
  * Link wrapper component that works in both Next.js and widget contexts
@@ -25341,6 +25425,7 @@ const Link = LinkComponent;
 
 
 
+
 // Client-side logger (simple console logger for browser)
 const logger = {
     info: (...args) => console.log("[INFO]", ...args),
@@ -25350,6 +25435,169 @@ const logger = {
 };
 // Import Link wrapper that works in both Next.js and widget contexts
 
+// SessionStorage keys for context persistence
+const STORAGE_KEY_LAST_PRODUCT = 'closelook_last_valid_product';
+const STORAGE_KEY_LAST_PAGE_CONTEXT = 'closelook_last_page_context';
+// Helper functions for context persistence
+function persistProductContext(product) {
+    if (typeof window === "undefined")
+        return;
+    if (product && product.id) {
+        try {
+            sessionStorage.setItem(STORAGE_KEY_LAST_PRODUCT, JSON.stringify({
+                id: product.id,
+                name: product.name,
+                url: product.url,
+                handle: product.handle,
+            }));
+            logger.debug("[Context] Product persisted to sessionStorage", { id: product.id, name: product.name });
+        }
+        catch (e) {
+            logger.warn("[Context] Failed to persist product to sessionStorage", { error: e });
+        }
+    }
+    else {
+        // Only clear if explicitly leaving product page (not on initial load)
+        // Don't clear on initial load - preserve last valid product
+    }
+}
+function loadStoredProductContext() {
+    if (typeof window === "undefined")
+        return null;
+    try {
+        const stored = sessionStorage.getItem(STORAGE_KEY_LAST_PRODUCT);
+        if (stored) {
+            const parsed = JSON.parse(stored);
+            if (parsed && parsed.id) {
+                logger.debug("[Context] Product loaded from sessionStorage", { id: parsed.id, name: parsed.name });
+                return {
+                    id: parsed.id,
+                    name: parsed.name || "Product",
+                    url: parsed.url,
+                    handle: parsed.handle,
+                    category: "",
+                    type: "",
+                    color: "",
+                    price: 0,
+                    images: [],
+                    description: "",
+                    sizes: [],
+                };
+            }
+        }
+    }
+    catch (e) {
+        logger.warn("[Context] Failed to load product from sessionStorage", { error: e });
+    }
+    return null;
+}
+function clearStoredProductContext() {
+    if (typeof window === "undefined")
+        return;
+    try {
+        sessionStorage.removeItem(STORAGE_KEY_LAST_PRODUCT);
+        sessionStorage.removeItem(STORAGE_KEY_LAST_PAGE_CONTEXT);
+        logger.debug("[Context] Product context cleared from sessionStorage");
+    }
+    catch (e) {
+        logger.warn("[Context] Failed to clear product from sessionStorage", { error: e });
+    }
+}
+// Function to recapture product context from page (for Shopify stores)
+function recaptureProductContextFromPage() {
+    if (typeof window === "undefined")
+        return null;
+    try {
+        // Check if we're on a product page
+        const pathname = window.location.pathname;
+        const isProductPage = pathname.includes('/products/');
+        if (!isProductPage) {
+            return null;
+        }
+        let productData = {};
+        // Method 1: ShopifyAnalytics (Most Reliable)
+        if (window.ShopifyAnalytics?.meta?.product) {
+            const product = window.ShopifyAnalytics.meta.product;
+            productData = {
+                id: product.id?.toString(),
+                gid: product.gid,
+                name: product.title || product.name,
+                title: product.title || product.name,
+                type: product.type,
+                vendor: product.vendor,
+            };
+            logger.debug("[Context] Product captured from ShopifyAnalytics", productData);
+        }
+        // Method 2: Meta tags (Fallback)
+        if (!productData.id) {
+            const metaProductId = document.querySelector('meta[property="product:id"]')?.getAttribute("content") ||
+                document.querySelector('meta[name="product:id"]')?.getAttribute("content");
+            if (metaProductId) {
+                productData.id = metaProductId;
+                logger.debug("[Context] Product ID from meta tag", metaProductId);
+            }
+        }
+        // Method 3: Extract handle from URL
+        const handleMatch = pathname.match(/\/products\/([^\/\?]+)/);
+        if (handleMatch) {
+            productData.handle = handleMatch[1];
+            logger.debug("[Context] Product handle from URL", productData.handle);
+        }
+        // Method 4: Try to find product JSON in page
+        const productJsonScript = document.querySelector('script[data-product-json]') ||
+            document.querySelector('script[type="application/json"][data-product]');
+        if (productJsonScript) {
+            try {
+                const productJson = JSON.parse(productJsonScript.textContent || '{}');
+                productData.id = productData.id || productJson.id?.toString();
+                productData.name = productData.name || productJson.title || productJson.name;
+                productData.handle = productData.handle || productJson.handle;
+                logger.debug("[Context] Product from JSON script", productData);
+            }
+            catch (e) {
+                logger.warn("[Context] Failed to parse product JSON", { error: e });
+            }
+        }
+        // Method 5: Check window.meta
+        if (window.meta?.product) {
+            const metaProduct = window.meta.product;
+            productData.id = productData.id || metaProduct.id?.toString();
+            productData.name = productData.name || metaProduct.title || metaProduct.name;
+            logger.debug("[Context] Product from window.meta");
+        }
+        // Method 6: Check Shopify.theme
+        if (window.Shopify?.theme?.product) {
+            const themeProduct = window.Shopify.theme.product;
+            productData.id = productData.id || themeProduct.id?.toString();
+            productData.name = productData.name || themeProduct.title || themeProduct.name;
+            logger.debug("[Context] Product from Shopify.theme");
+        }
+        if (productData.id || productData.handle) {
+            const recapturedProduct = {
+                id: productData.id || productData.handle || "",
+                name: productData.name || "Product",
+                url: window.location.href,
+                handle: productData.handle || undefined,
+                category: productData.category || "",
+                type: productData.type || "",
+                color: "",
+                price: 0,
+                images: [],
+                description: "",
+                sizes: [],
+            };
+            logger.info("[Context] ✅ Product recaptured from page", {
+                id: recapturedProduct.id,
+                name: recapturedProduct.name
+            });
+            return recapturedProduct;
+        }
+    }
+    catch (e) {
+        logger.warn("[Context] Error recapturing product context", { error: e });
+    }
+    return null;
+}
 function GlobalChatbot({ currentProduct, className }) {
     const pathname = usePathname();
     const [isOpen, setIsOpen] = (0,node_modules_react.useState)(false);
@@ -25362,6 +25610,11 @@ function GlobalChatbot({ currentProduct, className }) {
     const scrollRef = (0,node_modules_react.useRef)(null);
     const scrollAreaRef = (0,node_modules_react.useRef)(null);
     const inputRef = (0,node_modules_react.useRef)(null);
+    // State to track effective product (with fallback to stored context)
+    const [effectiveProduct, setEffectiveProduct] = (0,node_modules_react.useState)(currentProduct || null);
+    // Track current product ID/URL to detect changes
+    const currentProductIdRef = (0,node_modules_react.useRef)(null);
+    const currentProductUrlRef = (0,node_modules_react.useRef)(null);
     // Upload widget state (moved from CloselookWidget)
     const [userPhoto, setUserPhoto] = (0,node_modules_react.useState)(null);
     const [isGenerating, setIsGenerating] = (0,node_modules_react.useState)(false);
@@ -25380,6 +25633,261 @@ function GlobalChatbot({ currentProduct, className }) {
     const { setGeneratingProductId, userImages, setUserImages } = useCloselook();
     // Check if user has uploaded images
     const hasUploadedImages = userImages.fullBodyUrl || userImages.halfBodyUrl;
+    // ============ CRITICAL FIX: Persist product context when currentProduct prop changes ============
+    (0,node_modules_react.useEffect)(() => {
+        if (currentProduct && currentProduct.id) {
+            // Check if product has changed
+            const productId = currentProduct.id;
+            const productUrl = currentProduct.url || window.location.href;
+            // If product ID changed, always update (even if stored product exists)
+            if (currentProductIdRef.current !== productId || currentProductUrlRef.current !== productUrl) {
+                const previousId = currentProductIdRef.current;
+                currentProductIdRef.current = productId;
+                currentProductUrlRef.current = productUrl;
+                // Update effective product and persist to storage (replaces old product)
+                setEffectiveProduct(currentProduct);
+                persistProductContext(currentProduct);
+                logger.info("[Context] Product context updated from prop (new product detected)", {
+                    id: currentProduct.id,
+                    name: currentProduct.name,
+                    previousId: previousId
+                });
+            }
+        }
+        else if (currentProduct === null) {
+            // Explicitly null means we're not on a product page
+            // Only clear if we're truly leaving product page (not just prop not provided)
+            const isProductPage = typeof window !== "undefined" &&
+                (window.location.pathname.includes('/products/') ||
+                    window.ShopifyAnalytics?.meta?.product);
+            if (!isProductPage) {
+                // Not on product page - clear effective product and stored context
+                setEffectiveProduct(null);
+                clearStoredProductContext();
+                currentProductIdRef.current = null;
+                currentProductUrlRef.current = null;
+                logger.debug("[Context] Product context cleared (not on product page)");
+            }
+        }
+        else {
+            // currentProduct is undefined - try to use stored context or recapture
+            const recaptured = recaptureProductContextFromPage();
+            if (recaptured) {
+                // Check if recaptured product is different from current
+                const recapturedId = recaptured.id;
+                const recapturedUrl = recaptured.url || window.location.href;
+                // Always update if product ID or URL changed
+                if (currentProductIdRef.current !== recapturedId || currentProductUrlRef.current !== recapturedUrl) {
+                    currentProductIdRef.current = recapturedId;
+                    currentProductUrlRef.current = recapturedUrl;
+                    setEffectiveProduct(recaptured);
+                    persistProductContext(recaptured); // Replace stored product with new one
+                    logger.info("[Context] Product context recaptured from page (new product)", {
+                        id: recaptured.id,
+                        name: recaptured.name
+                    });
+                }
+            }
+            else {
+                // Not on product page - check if we should clear
+                const stored = loadStoredProductContext();
+                if (stored && !window.location.pathname.includes('/products/')) {
+                    // We're not on a product page, but we have stored product - keep it as fallback
+                    setEffectiveProduct(stored);
+                    logger.info("[Context] Product context loaded from storage (not on product page)", {
+                        id: stored.id,
+                        name: stored.name
+                    });
+                }
+                else if (!stored) {
+                    setEffectiveProduct(null);
+                    currentProductIdRef.current = null;
+                    currentProductUrlRef.current = null;
+                }
+            }
+        }
+    }, [currentProduct]);
+    // ============ CRITICAL FIX: Recapture context on navigation/page changes ============
+    // This ensures product updates automatically when navigating to different product pages
+    (0,node_modules_react.useEffect)(() => {
+        if (typeof window === "undefined")
+            return;
+        // Wait a bit for page to load (especially for SPA navigation)
+        const timeoutId = setTimeout(() => {
+            const recaptured = recaptureProductContextFromPage();
+            const currentUrl = window.location.href;
+            const currentPathname = window.location.pathname;
+            if (recaptured) {
+                const recapturedId = recaptured.id;
+                const recapturedUrl = recaptured.url || currentUrl;
+                // CRITICAL: Always update if product ID or URL changed (different product page)
+                if (currentProductIdRef.current !== recapturedId || currentProductUrlRef.current !== recapturedUrl) {
+                    // Product changed - update immediately
+                    const previousId = currentProductIdRef.current;
+                    currentProductIdRef.current = recapturedId;
+                    currentProductUrlRef.current = recapturedUrl;
+                    setEffectiveProduct(recaptured);
+                    persistProductContext(recaptured); // Replace old product with new one
+                    logger.info("[Context] Product context updated after navigation (new product detected)", {
+                        id: recaptured.id,
+                        name: recaptured.name,
+                        pathname: currentPathname,
+                        previousId: previousId,
+                        url: currentUrl
+                    });
+                }
+                else {
+                    // Same product - just ensure it's set
+                    setEffectiveProduct(recaptured);
+                    logger.debug("[Context] Same product after navigation", {
+                        id: recaptured.id,
+                        pathname: currentPathname
+                    });
+                }
+            }
+            else {
+                // Check if we're no longer on a product page
+                const isProductPage = currentPathname.includes('/products/');
+                if (!isProductPage) {
+                    // Not on product page - clear refs but keep stored context as fallback
+                    if (effectiveProduct) {
+                        currentProductIdRef.current = null;
+                        currentProductUrlRef.current = null;
+                        logger.debug("[Context] Left product page, cleared active product", { pathname: currentPathname });
+                    }
+                }
+            }
+        }, 300); // 300ms delay to let page load
+        return () => clearTimeout(timeoutId);
+    }, [pathname, effectiveProduct]);
+    // ============ CRITICAL FIX: Recapture context when chat window opens ============
+    (0,node_modules_react.useEffect)(() => {
+        if (!isOpen)
+            return;
+        // Recapture context when chat opens (user might have navigated to different product)
+        const timeoutId = setTimeout(() => {
+            const recaptured = recaptureProductContextFromPage();
+            const currentUrl = window.location.href;
+            if (recaptured) {
+                const recapturedId = recaptured.id;
+                const recapturedUrl = recaptured.url || currentUrl;
+                // CRITICAL: Always update if product changed (different product page)
+                if (currentProductIdRef.current !== recapturedId || currentProductUrlRef.current !== recapturedUrl) {
+                    const previousId = currentProductIdRef.current;
+                    currentProductIdRef.current = recapturedId;
+                    currentProductUrlRef.current = recapturedUrl;
+                    setEffectiveProduct(recaptured);
+                    persistProductContext(recaptured); // Replace old product with new one
+                    logger.info("[Context] Product context updated on chat open (new product detected)", {
+                        id: recaptured.id,
+                        name: recaptured.name,
+                        previousId: previousId
+                    });
+                }
+                else {
+                    // Same product - just ensure it's set
+                    setEffectiveProduct(recaptured);
+                    logger.debug("[Context] Same product on chat open", { id: recaptured.id });
+                }
+            }
+            else {
+                // Fallback to stored context only if we're not on a product page
+                const stored = loadStoredProductContext();
+                if (stored && !window.location.pathname.includes('/products/')) {
+                    if (!effectiveProduct) {
+                        setEffectiveProduct(stored);
+                        logger.info("[Context] Product context restored from storage on chat open", {
+                            id: stored.id,
+                            name: stored.name
+                        });
+                    }
+                }
+            }
+        }, 200); // 200ms delay after chat opens
+        return () => clearTimeout(timeoutId);
+    }, [isOpen, effectiveProduct]);
+    // ============ CRITICAL FIX: Listen for navigation events (SPA, Turbo, etc.) ============
+    // This ensures product updates automatically on any navigation (SPA, page refresh, etc.)
+    (0,node_modules_react.useEffect)(() => {
+        if (typeof window === "undefined")
+            return;
+        const handleNavigation = () => {
+            // Delay to let new page load
+            setTimeout(() => {
+                const recaptured = recaptureProductContextFromPage();
+                const currentUrl = window.location.href;
+                if (recaptured) {
+                    const recapturedId = recaptured.id;
+                    const recapturedUrl = recaptured.url || currentUrl;
+                    // CRITICAL: Always update if product ID or URL changed (different product page)
+                    if (currentProductIdRef.current !== recapturedId || currentProductUrlRef.current !== recapturedUrl) {
+                        // Product changed - update immediately
+                        const previousId = currentProductIdRef.current;
+                        currentProductIdRef.current = recapturedId;
+                        currentProductUrlRef.current = recapturedUrl;
+                        setEffectiveProduct(recaptured);
+                        persistProductContext(recaptured); // Replace old product with new one
+                        logger.info("[Context] Product context updated on navigation event (new product detected)", {
+                            id: recaptured.id,
+                            name: recaptured.name,
+                            url: currentUrl,
+                            previousId: previousId
+                        });
+                    }
+                    else {
+                        // Same product - just ensure it's set
+                        setEffectiveProduct(recaptured);
+                        logger.debug("[Context] Same product on navigation event", { id: recaptured.id });
+                    }
+                }
+                else {
+                    // Not on product page - clear refs if we were on a product page before
+                    if (currentProductIdRef.current) {
+                        currentProductIdRef.current = null;
+                        currentProductUrlRef.current = null;
+                        logger.debug("[Context] Left product page on navigation event");
+                    }
+                }
+            }, 300);
+        };
+        // Listen to popstate (back/forward)
+        window.addEventListener('popstate', handleNavigation);
+        // Listen to pushState/replaceState (SPA navigation)
+        const originalPushState = history.pushState;
+        const originalReplaceState = history.replaceState;
+        history.pushState = function (...args) {
+            originalPushState.apply(history, args);
+            handleNavigation();
+        };
+        history.replaceState = function (...args) {
+            originalReplaceState.apply(history, args);
+            handleNavigation();
+        };
+        // Poll for URL changes (fallback for all navigation types)
+        // This catches any navigation that doesn't trigger the above events
+        // In browser, setInterval returns a number, not NodeJS.Timeout
+        let urlCheckInterval = null;
+        if (typeof window !== "undefined" && window.setInterval) {
+            urlCheckInterval = window.setInterval(() => {
+                const currentUrl = window.location.href;
+                const lastUrl = window.__lastChatbotUrl;
+                if (currentUrl !== lastUrl) {
+                    window.__lastChatbotUrl = currentUrl;
+                    handleNavigation();
+                }
+            }, 500); // Poll every 500ms
+        }
+        // Initialize last URL
+        window.__lastChatbotUrl = window.location.href;
+        return () => {
+            window.removeEventListener('popstate', handleNavigation);
+            history.pushState = originalPushState;
+            history.replaceState = originalReplaceState;
+            if (urlCheckInterval && typeof window !== "undefined" && window.clearInterval) {
+                window.clearInterval(urlCheckInterval);
+            }
+        };
+    }, []);
     // Fetch existing user images on mount
     (0,node_modules_react.useEffect)(() => {
         // Skip if images are already loaded
@@ -25388,9 +25896,9 @@ function GlobalChatbot({ currentProduct, className }) {
         }
         const fetchUserImages = async () => {
             try {
-                // Get Shopify customer ID from window if available (for Shopify stores)
+                // Get Shopify customer ID using robust detection method
                 const shopifyCustomerId = typeof window !== "undefined"
-                    ? window.Shopify?.customer?.id
+                    ? (0,customer_detector/* getShopifyCustomerId */.u)()
                     : null;
                 const headers = {};
                 if (shopifyCustomerId) {
@@ -25455,13 +25963,14 @@ function GlobalChatbot({ currentProduct, className }) {
             inputRef.current.focus();
         }
     }, [isOpen]);
+    // Use effectiveProduct instead of currentProduct for prompts
     const promptTemplates = pathname === "/"
         ? [
             "Show me trending products",
             "Help me find something",
             "What are your best-selling items?",
         ]
-        : currentProduct
+        : effectiveProduct
             ? [
                 "Tell me more about this product",
                 "Recommend matching items",
@@ -25539,7 +26048,85 @@ function GlobalChatbot({ currentProduct, className }) {
         setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
         setIsLoading(true);
         try {
-            const pageContext = pathname === "/" ? "home" : currentProduct ? "product" : "other";
+            // ============ CRITICAL FIX: Always recapture product before sending (ensures latest product) ============
+            // Always recapture to ensure we have the current product (might have navigated to different product)
+            let productToSend = null;
+            const recaptured = recaptureProductContextFromPage();
+            const currentUrl = window.location.href;
+            const currentPathname = window.location.pathname;
+            // Also check if currentProduct prop has changed (from wrapper)
+            if (currentProduct && currentProduct.id) {
+                const propProductId = currentProduct.id;
+                const propProductUrl = currentProduct.url || currentUrl;
+                // CRITICAL: Always update if product changed (different product page)
+                if (currentProductIdRef.current !== propProductId || currentProductUrlRef.current !== propProductUrl) {
+                    // Product changed - update immediately
+                    const previousId = currentProductIdRef.current;
+                    currentProductIdRef.current = propProductId;
+                    currentProductUrlRef.current = propProductUrl;
+                    productToSend = {
+                        id: propProductId,
+                        name: currentProduct.name || "Product",
+                        url: propProductUrl,
+                        handle: currentProduct.handle || undefined,
+                        category: currentProduct.category || "",
+                        type: currentProduct.type || "",
+                        color: currentProduct.color || "",
+                        price: currentProduct.price || 0,
+                        images: currentProduct.images || [],
+                        description: currentProduct.description || "",
+                        sizes: currentProduct.sizes || [],
+                    };
+                    setEffectiveProduct(productToSend);
+                    persistProductContext(productToSend); // Replace old product with new one
+                    if (productToSend) {
+                        logger.info("[Context] Product updated from prop before sending message (new product detected)", {
+                            id: productToSend.id,
+                            name: productToSend.name,
+                            previousId: previousId,
+                            url: propProductUrl
+                        });
+                    }
+                }
+            }
+            // If we don't have a product from prop, try recaptured
+            if (!productToSend && recaptured) {
+                const recapturedId = recaptured.id;
+                const recapturedUrl = recaptured.url || currentUrl;
+                // CRITICAL: Always update if product changed (different product page)
+                if (currentProductIdRef.current !== recapturedId || currentProductUrlRef.current !== recapturedUrl) {
+                    // Product changed - update immediately
+                    const previousId = currentProductIdRef.current;
+                    currentProductIdRef.current = recapturedId;
+                    currentProductUrlRef.current = recapturedUrl;
+                    productToSend = recaptured;
+                    setEffectiveProduct(recaptured);
+                    persistProductContext(recaptured); // Replace old product with new one
+                    logger.info("[Context] Product updated from page recapture before sending message (new product detected)", {
+                        id: recaptured.id,
+                        name: recaptured.name,
+                        previousId: previousId,
+                        url: recapturedUrl
+                    });
+                }
+                else {
+                    // Same product - use recaptured to ensure we have latest data
+                    productToSend = recaptured;
+                    setEffectiveProduct(recaptured);
+                    logger.debug("[Context] Same product before sending message", { id: recaptured.id });
+                }
+            }
+            // Fallback to effectiveProduct or stored context
+            if (!productToSend) {
+                productToSend = effectiveProduct || loadStoredProductContext();
+                if (productToSend && !currentPathname.includes('/products/') && !currentPathname.includes('/product/')) {
+                    logger.info("[Context] Using stored product context (not on product page)", {
+                        id: productToSend.id,
+                        name: productToSend.name
+                    });
+                }
+            }
+            const pageContext = pathname === "/" ? "home" : productToSend ? "product" : "other";
             // Try to get shop domain and customer name from Shopify storefront context
             let shopDomain = undefined;
             let customerName = undefined;
@@ -25576,59 +26163,82 @@ function GlobalChatbot({ currentProduct, className }) {
                     // Backend will handle session lookup if needed
                 }
                 // Detect customer from Shopify storefront context (only name for personalization)
+                // CRITICAL: Always try to detect customer name - it's essential for personalization
                 try {
-                    const customerDetector = await __webpack_require__.e(/* import() */ 691).then(__webpack_require__.bind(__webpack_require__, 691));
+                    const customerDetector = await Promise.resolve(/* import() */).then(__webpack_require__.bind(__webpack_require__, 691));
                     const detected = customerDetector.detectShopifyCustomer();
                     if (detected.isLoggedIn) {
-                        customerName = detected.name;
+                        // Always use detected name if available
+                        customerName = detected.name || customerName;
                         // Store internal fields for backend use (not sent to chat API)
                         customerInternal = detected._internal;
+                        logger.info("[Context] Customer detected", {
+                            name: customerName,
+                            isLoggedIn: detected.isLoggedIn,
+                            hasInternal: !!customerInternal
+                        });
+                    }
+                    else {
+                        logger.debug("[Context] Customer not logged in or not detected");
                     }
                 }
                 catch (e) {
                     // Customer detection not available or error
                     // This is fine - customer may not be logged in
+                    logger.debug("[Context] Customer detection failed", { error: e });
                 }
             }
             // Get product URL for product page analysis
             let productUrl = undefined;
-            if (currentProduct && typeof window !== "undefined") {
+            if (productToSend && typeof window !== "undefined") {
                 // Prefer product.url if available
-                if (currentProduct.url && currentProduct.url.startsWith("http")) {
-                    productUrl = currentProduct.url;
+                if (productToSend.url && productToSend.url.startsWith("http")) {
+                    productUrl = productToSend.url;
                 }
                 // Use current page URL if on product page
                 else if (pageContext === "product") {
                     productUrl = window.location.href;
                 }
             }
+            // ============ CRITICAL FIX: Build payload with smart product context ============
+            const payload = {
+                message: userMessage,
+                conversationHistory: messages.map((m) => ({
+                    role: m.role,
+                    content: m.content,
+                })),
+                pageContext,
+                shop: shopDomain, // Shopify shop domain
+                customerName: customerName, // Customer name for personalization only
+                customerInternal: customerInternal, // Internal customer info for API calls (not used by chatbot)
+                // Always send product context if available (with fallback to stored)
+                currentProduct: productToSend
+                    ? {
+                        id: productToSend.id,
+                        // Only send basic identifying info, backend will fetch full details
+                        name: productToSend.name,
+                        url: productUrl, // Include product URL for page analysis
+                        handle: productToSend.handle || undefined, // Include handle for backend lookup
+                    }
+                    : undefined,
+                // No longer sending allProducts - backend will fetch from Shopify
+                // This keeps widget lightweight (UI + basic tracking only)
+                allProducts: undefined,
+            };
+            // ============ CRITICAL FIX: Log payload for debugging ============
+            logger.info("[Context] Payload to backend:", {
+                currentProduct: payload.currentProduct,
+                pageContext: payload.pageContext,
+                shop: payload.shop,
+                hasProduct: !!payload.currentProduct,
+                productId: payload.currentProduct?.id,
+                productName: payload.currentProduct?.name,
+                message: userMessage.substring(0, 50) + (userMessage.length > 50 ? "..." : ""),
+            });
             const response = await fetch("/api/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    message: userMessage,
-                    conversationHistory: messages.map((m) => ({
-                        role: m.role,
-                        content: m.content,
-                    })),
-                    pageContext,
-                    shop: shopDomain, // Shopify shop domain
-                    customerName: customerName, // Customer name for personalization only
-                    customerInternal: customerInternal, // Internal customer info for API calls (not used by chatbot)
-                    // Widget sends minimal data - only product ID/handle and shop domain
-                    // Backend fetches full product data from Shopify
-                    currentProduct: currentProduct
-                        ? {
-                            id: currentProduct.id,
-                            // Only send basic identifying info, backend will fetch full details
-                            name: currentProduct.name,
-                            url: productUrl, // Include product URL for page analysis
-                        }
-                        : undefined,
-                    // No longer sending allProducts - backend will fetch from Shopify
-                    // This keeps widget lightweight (UI + basic tracking only)
-                    allProducts: undefined,
-                }),
+                body: JSON.stringify(payload),
             });
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
@@ -25679,10 +26289,10 @@ function GlobalChatbot({ currentProduct, className }) {
     };
     // Upload widget handlers (moved from CloselookWidget)
     const handleTryOnWithUrls = async (images) => {
-        if (!currentProduct)
+        if (!effectiveProduct)
             return;
         setIsGenerating(true);
-        setGeneratingProductId(currentProduct.id);
+        setGeneratingProductId(effectiveProduct.id);
         setUploadError(null);
         try {
             const formData = new FormData();
@@ -25699,10 +26309,10 @@ function GlobalChatbot({ currentProduct, className }) {
                 ? (window.Shopify?.shop || window.shopDomain || null)
                 : null;
             let productImageCount = 0;
-            if (!shopDomain && currentProduct.images && currentProduct.images.length > 0) {
+            if (!shopDomain && effectiveProduct.images && effectiveProduct.images.length > 0) {
                 // Not in Shopify context, fetch images client-side as fallback
                 const maxProductImages = 3;
-                const productImagesToSend = currentProduct.images.slice(0, maxProductImages);
+                const productImagesToSend = effectiveProduct.images.slice(0, maxProductImages);
                 for (let i = 0; i < productImagesToSend.length; i++) {
                     const productImageResponse = await fetch(productImagesToSend[i]);
                     const productImageBlob = await productImageResponse.blob();
@@ -25716,17 +26326,17 @@ function GlobalChatbot({ currentProduct, className }) {
                 logger.info("Shopify context detected, backend will fetch product images", { shopDomain });
             }
             formData.append("productImageCount", String(productImageCount));
-            formData.append("productName", currentProduct.name);
-            formData.append("productCategory", currentProduct.category);
-            formData.append("productType", currentProduct.type);
-            formData.append("productColor", currentProduct.color);
+            formData.append("productName", effectiveProduct.name);
+            formData.append("productCategory", effectiveProduct.category);
+            formData.append("productType", effectiveProduct.type);
+            formData.append("productColor", effectiveProduct.color);
             // Send product page URL if available (for enhanced product analysis)
-            if (currentProduct.url || (typeof window !== "undefined" && window.location.href)) {
-                const productUrl = currentProduct.url || window.location.href;
+            if (effectiveProduct.url || (typeof window !== "undefined" && window.location.href)) {
+                const productUrl = effectiveProduct.url || window.location.href;
                 formData.append("productUrl", productUrl);
             }
             // Include analytics tracking data
-            formData.append("productId", currentProduct.id);
+            formData.append("productId", effectiveProduct.id);
             // Get shop domain and customer info from window (for Shopify stores)
             const headers = {};
             if (typeof window !== "undefined") {
@@ -25734,7 +26344,7 @@ function GlobalChatbot({ currentProduct, className }) {
                     formData.append("shopDomain", shopDomain);
                 }
                 // Get customer info for tracking
-                const shopifyCustomerId = window.Shopify?.customer?.id;
+                const shopifyCustomerId = (0,customer_detector/* getShopifyCustomerId */.u)();
                 if (shopifyCustomerId) {
                     formData.append("shopifyCustomerId", shopifyCustomerId.toString());
                     headers["x-shopify-customer-id"] = shopifyCustomerId.toString();
@@ -25745,8 +26355,8 @@ function GlobalChatbot({ currentProduct, className }) {
                 }
             }
             logger.info("Sending try-on request", {
-                productId: currentProduct.id,
-                productName: currentProduct.name,
+                productId: effectiveProduct.id,
+                productName: effectiveProduct.name,
                 hasFullBody: !!images.fullBodyUrl,
                 hasHalfBody: !!images.halfBodyUrl,
             });
@@ -25766,7 +26376,7 @@ function GlobalChatbot({ currentProduct, className }) {
             const result = await response.json();
             setGeneratingProductId(null);
             logger.info("Try-on generation successful", {
-                productId: currentProduct.id,
+                productId: effectiveProduct.id,
                 imageUrl: result.imageUrl,
             });
             // Show success message with image in chat
@@ -25774,7 +26384,7 @@ function GlobalChatbot({ currentProduct, className }) {
                 ...prev,
                 {
                     role: "assistant",
-                    content: `Great! I've generated your virtual try-on for ${currentProduct.name}. Here's how it looks on you!`,
+                    content: `Great! I've generated your virtual try-on for ${effectiveProduct.name}. Here's how it looks on you!`,
                     imageUrl: result.imageUrl,
                     imageType: "try-on",
                 },
@@ -25783,7 +26393,7 @@ function GlobalChatbot({ currentProduct, className }) {
         catch (err) {
             const errorMessage = err instanceof Error ? err.message : "Failed to generate try-on";
             logger.error("Try-on generation failed", {
-                productId: currentProduct.id,
+                productId: effectiveProduct.id,
                 error: errorMessage,
             });
             setUploadError(errorMessage);
@@ -25803,7 +26413,7 @@ function GlobalChatbot({ currentProduct, className }) {
     };
     // Keep old handleTryOn for backward compatibility
     const handleTryOn = async (file) => {
-        if (!currentProduct)
+        if (!effectiveProduct)
             return;
         // Upload file first, then use URLs
         const formData = new FormData();
@@ -25832,7 +26442,7 @@ function GlobalChatbot({ currentProduct, className }) {
         }
     };
     const handleTryOnClick = async () => {
-        if (!currentProduct || isGenerating)
+        if (!effectiveProduct || isGenerating)
             return;
         // Check if user images are already saved in context
         const hasSavedImages = userImages.fullBodyUrl || userImages.halfBodyUrl;
@@ -25890,9 +26500,9 @@ function GlobalChatbot({ currentProduct, className }) {
             // Get request headers including Shopify customer ID if available
             const uploadHeaders = {};
             if (typeof window !== "undefined") {
-                const shopifyCustomerId = window.Shopify?.customer?.id;
+                const shopifyCustomerId = (0,customer_detector/* getShopifyCustomerId */.u)();
                 if (shopifyCustomerId) {
-                    uploadHeaders["x-shopify-customer-id"] = shopifyCustomerId.toString();
+                    uploadHeaders["x-shopify-customer-id"] = shopifyCustomerId;
                 }
             }
             logger.info("Uploading user images to secure storage");
@@ -26008,13 +26618,13 @@ function GlobalChatbot({ currentProduct, className }) {
                         } })),
                 node_modules_react.createElement("div", { className: "flex-1" },
                     node_modules_react.createElement("h3", { className: "font-bold text-base text-gray-900 dark:text-gray-100" }, "Hi, I'm your shopping assistant"),
-                    currentProduct && (node_modules_react.createElement("p", { className: "text-xs text-gray-600 dark:text-gray-400 mt-1" },
+                    effectiveProduct && (node_modules_react.createElement("p", { className: "text-xs text-gray-600 dark:text-gray-400 mt-1" },
                         "Currently viewing ",
-                        node_modules_react.createElement("span", { className: "font-medium" }, currentProduct.name)))),
+                        node_modules_react.createElement("span", { className: "font-medium" }, effectiveProduct.name)))),
                 node_modules_react.createElement("button", { onClick: () => setIsOpen(false), className: "p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex-shrink-0 ml-2", "aria-label": "Close chat" },
                     node_modules_react.createElement(X, { className: "h-4 w-4 text-gray-700 dark:text-gray-300" }))),
             node_modules_react.createElement("div", { className: "flex items-center gap-2 px-3 pb-3 flex-shrink-0" },
-                node_modules_react.createElement("button", { onClick: handleTryOnClick, disabled: !currentProduct, className: utils_cn("flex-1 px-4 py-2 bg-gray-800 dark:bg-gray-800 text-white rounded-lg text-sm font-medium hover:bg-gray-700 dark:hover:bg-gray-700 transition-colors flex items-center justify-center gap-2", !currentProduct && "opacity-50 cursor-not-allowed"), "aria-label": "Try on this product" },
+                node_modules_react.createElement("button", { onClick: handleTryOnClick, disabled: !effectiveProduct, className: utils_cn("flex-1 px-4 py-2 bg-gray-800 dark:bg-gray-800 text-white rounded-lg text-sm font-medium hover:bg-gray-700 dark:hover:bg-gray-700 transition-colors flex items-center justify-center gap-2", !effectiveProduct && "opacity-50 cursor-not-allowed"), "aria-label": "Try on this product" },
                     node_modules_react.createElement(Sparkles, { className: "h-4 w-4" }),
                     "Try on this product"),
                 node_modules_react.createElement("div", { className: "flex-shrink-0" },

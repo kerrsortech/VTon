@@ -356,17 +356,11 @@ export async function POST(request: NextRequest) {
       return addCorsHeaders(response, request)
     }
 
-    // ============ CRITICAL FIX: Log full request body for debugging ============
-    logger.info('[Chat API] Full request body:', JSON.stringify(requestBody, null, 2))
-    
     // Get session ID from request (from new context-aware widget)
     const sessionId = requestBody.session_id || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
     
-    // ============ CRITICAL FIX: Extract currentProduct from request body ============
-    // Frontend sends: { currentProduct: { id: "8252597338298", ... } }
+    // Extract currentProduct from request body
     const currentProductFromBody = requestBody.currentProduct || null
-    
-    logger.info('[Chat API] Extracted currentProduct from body:', JSON.stringify(currentProductFromBody, null, 2))
     
     // Get context from request (new context-aware widget sends this)
     let context = requestBody.context || null
@@ -375,11 +369,6 @@ export async function POST(request: NextRequest) {
     if (context && sessionId) {
       try {
         await setContext(sessionId, context)
-        logger.info('[Chat API] Context stored in Redis', { 
-          sessionId, 
-          pageType: context.page_type,
-          hasProduct: !!context.current_product
-        })
       } catch (error) {
         logger.warn('[Chat API] Failed to store context in Redis', { error })
       }
@@ -389,21 +378,19 @@ export async function POST(request: NextRequest) {
     if (!context && sessionId) {
       try {
         context = await getContext(sessionId)
-        if (context) {
-          logger.info('[Chat API] Context loaded from Redis', { sessionId })
-        }
       } catch (error) {
         logger.warn('[Chat API] Failed to load context from Redis', { error })
       }
     }
 
-    // Detect query type (order, policy, account, etc.)
+    // Detect query type (order, policy, account, cart, etc.)
     // Only fetch data when explicitly asked
     const queryType = detectQueryType(message)
     
-    // Smart detection: Only fetch if query is clearly about orders/account
+    // Smart detection: Only fetch if query is clearly about orders/account/cart
     const shouldFetchOrders = queryType.isOrder || queryType.isAccount
     const shouldFetchPolicies = queryType.isPolicy
+    const shouldFetchCart = queryType.isCart
 
     // BACKEND LOGIC: Fetch products and current product from Shopify if shop domain is provided
     // Use context from widget if available, otherwise use validated input
@@ -432,10 +419,6 @@ export async function POST(request: NextRequest) {
             const productIdMatch = msg.content.match(/product[_-]?id[:\s]+([a-zA-Z0-9-_]+)/i)
             if (productIdMatch) {
               recoveredProductContext = { id: productIdMatch[1] }
-              logger.info('[Chat API] Product context recovered from conversation history', {
-                productId: recoveredProductContext.id,
-                fromMessage: i
-              })
               break
             }
           }
@@ -444,9 +427,6 @@ export async function POST(request: NextRequest) {
         // Also check if we have stored context in Redis with product info
         if (!recoveredProductContext && context && context.current_product) {
           recoveredProductContext = context.current_product
-          logger.info('[Chat API] Product context recovered from stored context', {
-            productId: recoveredProductContext.id
-          })
         }
       } catch (error) {
         logger.warn('[Chat API] Failed to recover product context from history', { error })
@@ -461,13 +441,6 @@ export async function POST(request: NextRequest) {
                    recoveredProductContext?.id ||
                    currentProduct?.id
     
-    logger.info('[Chat API] Product ID extracted:', { 
-      productId,
-      fromBody: currentProductFromBody?.id,
-      fromContext: context?.current_product?.id || context?.current_product?.gid,
-      fromHistory: recoveredProductContext?.id,
-      fromValidated: currentProduct?.id
-    })
     
     let fetchedProducts: Product[] = []
     
@@ -481,25 +454,21 @@ export async function POST(request: NextRequest) {
           currentProductFromBody.url.split('/products/')[1]?.split('?')[0] : 
           currentProductFromBody.handle || null
       }
-      logger.info('[Chat API] Product to fetch from body:', productToFetch)
     } else if (context?.current_product && (context.current_product.id || context.current_product.gid || context.current_product.handle)) {
       productToFetch = {
         id: context.current_product.id || context.current_product.gid,
         handle: context.current_product.handle || null
       }
-      logger.info('[Chat API] Product to fetch from context:', productToFetch)
     } else if (recoveredProductContext && (recoveredProductContext.id || recoveredProductContext.gid || recoveredProductContext.handle)) {
       productToFetch = {
         id: recoveredProductContext.id || recoveredProductContext.gid,
         handle: recoveredProductContext.handle || null
       }
-      logger.info('[Chat API] Product to fetch from recovered history:', productToFetch)
     } else if (currentProduct?.id) {
       productToFetch = {
         id: currentProduct.id,
         handle: currentProduct.handle || null
       }
-      logger.info('[Chat API] Product to fetch from validated input:', productToFetch)
     }
     
     // ============ CRITICAL FIX: Build fetchedCurrentProduct with fallback to recovered context ============
@@ -536,25 +505,20 @@ export async function POST(request: NextRequest) {
           
           // ============ CRITICAL FIX: Fetch product using productToFetch ============
           // Always fetch complete product details from Shopify when product ID is provided
-          // This ensures Gemini receives complete, accurate product information
           if (productToFetch && (productToFetch.id || productToFetch.handle)) {
             try {
-              logger.info('[Chat API] Fetching product details from Shopify...', productToFetch)
-              
               let closelookProduct: CloselookProduct | null = null
               
               // Try fetching by handle first if available, otherwise use ID
               if (productToFetch.handle) {
                 try {
                   closelookProduct = await adapter.getProductByHandle(productToFetch.handle)
-                  if (closelookProduct) {
-                    logger.info('[Chat API] ✅ Product fetched by handle from Shopify', {
-                      id: closelookProduct.id,
-                      name: closelookProduct.name
-                    })
-                  }
                 } catch (handleError) {
-                  logger.warn('[Chat API] Failed to fetch product by handle', { error: handleError })
+                  logger.error('[SHOPIFY API] Failed to fetch product by handle', { 
+                    error: handleError instanceof Error ? handleError.message : String(handleError),
+                    handle: productToFetch.handle,
+                    shop: shopDomain
+                  })
                 }
               }
               
@@ -564,26 +528,20 @@ export async function POST(request: NextRequest) {
                 
                 // If ID is numeric (not already in GID format), convert to GID
                 if (productIdToFetch && !productIdToFetch.startsWith('gid://')) {
-                  // Remove any existing gid:// prefix and extract numeric part
                   const numericId = productIdToFetch.replace(/^gid:\/\/shopify\/Product\//, '').replace(/[^0-9]/g, '')
                   if (numericId) {
                     productIdToFetch = `gid://shopify/Product/${numericId}`
-                  } else {
-                    // If we can't extract numeric ID, try using the ID as-is
-                    logger.warn('[Chat API] Could not extract numeric ID, using as-is', { originalId: productIdToFetch })
                   }
                 }
-                
-                logger.info('[Chat API] Fetching complete product details from Shopify by ID', {
-                  productId: productIdToFetch,
-                  shopDomain,
-                  hasStorefrontToken: !!storefrontToken
-                })
                 
                 try {
                   closelookProduct = await adapter.getProduct(productIdToFetch)
                 } catch (idError) {
-                  logger.warn('[Chat API] Failed to fetch product by ID', { error: idError })
+                  logger.error('[SHOPIFY API] Failed to fetch product by ID', { 
+                    error: idError instanceof Error ? idError.message : String(idError),
+                    productId: productIdToFetch,
+                    shop: shopDomain
+                  })
                 }
               }
               
@@ -605,23 +563,7 @@ export async function POST(request: NextRequest) {
                   url: fetchedCurrentProduct?.url || undefined,
                   handle: closelookProduct.handle || fetchedCurrentProduct?.handle || undefined
                 }
-                logger.info('[Chat API] ✅ Successfully fetched complete product details from Shopify', {
-                  productId: closelookProduct.id,
-                  productName: closelookProduct.name,
-                  hasDescription: !!closelookProduct.description,
-                  descriptionLength: closelookProduct.description?.length || 0,
-                  imageCount: closelookProduct.images?.length || 0,
-                  hasSizes: !!closelookProduct.sizes && closelookProduct.sizes.length > 0,
-                  category: closelookProduct.category,
-                  type: closelookProduct.type,
-                  price: closelookProduct.price
-                })
               } else {
-                logger.warn('[Chat API] Product not found in Shopify, using widget data', { 
-                  productToFetch,
-                  shopDomain,
-                  widgetProductName: fetchedCurrentProduct?.name
-                })
                 // Keep widget data but ensure we have at least a name
                 if (fetchedCurrentProduct && !fetchedCurrentProduct.name && fetchedCurrentProduct.id) {
                   fetchedCurrentProduct = {
@@ -631,14 +573,12 @@ export async function POST(request: NextRequest) {
                 }
               }
             } catch (productError) {
-              logger.error('[Chat API] Error fetching current product from Shopify', { 
+              logger.error('[SHOPIFY API] Error in product fetch flow', { 
                 error: productError instanceof Error ? productError.message : String(productError),
-                errorStack: productError instanceof Error ? productError.stack : undefined,
                 productToFetch,
-                shopDomain
+                shop: shopDomain
               })
               // Keep the minimal product data from widget as fallback
-              // Ensure we have at least a name
               if (fetchedCurrentProduct && !fetchedCurrentProduct.name && fetchedCurrentProduct.id) {
                 fetchedCurrentProduct = {
                   ...fetchedCurrentProduct,
@@ -646,40 +586,15 @@ export async function POST(request: NextRequest) {
                 }
               }
             }
-          } else if (fetchedCurrentProduct && !fetchedCurrentProduct.id) {
-            logger.warn("Current product exists but has no ID", {
-              hasName: !!fetchedCurrentProduct.name,
-              hasCategory: !!fetchedCurrentProduct.category,
-              shopDomain
-            })
           }
-          
-          // Fetch all products from Shopify Storefront API using adapter
-          const closelookProducts: CloselookProduct[] = await adapter.getAllProducts()
-          
-          // Convert CloselookProduct to Product format
-          fetchedProducts = closelookProducts.map((cp: CloselookProduct) => ({
-            id: cp.id,
-            name: cp.name,
-            category: cp.category,
-            type: cp.type,
-            color: cp.color,
-            price: cp.price,
-            images: cp.images,
-            description: cp.description,
-            sizes: cp.sizes,
-          }))
-          
-          logger.info(`Fetched ${fetchedProducts.length} products from Shopify for shop ${shopDomain}`)
         } else {
-          logger.warn(`No storefront token available for shop ${shopDomain}, using products from request if provided`)
+          logger.warn(`No storefront token available for shop ${shopDomain}`)
         }
       } catch (error) {
-        logger.error("Error fetching products from Shopify", { 
+        logger.error("Error fetching product from Shopify", { 
           error: error instanceof Error ? error.message : String(error),
           shopDomain 
         })
-        // Fallback to products from request if available
       }
     }
     
@@ -710,22 +625,6 @@ export async function POST(request: NextRequest) {
       }
     }
     
-    // Log final product state for debugging
-    if (pageType === "product") {
-      logger.info(`Final product state for context`, {
-        hasProduct: !!finalCurrentProduct,
-        productId: finalCurrentProduct?.id,
-        productName: finalCurrentProduct?.name,
-        hasDescription: !!finalCurrentProduct?.description,
-        descriptionLength: finalCurrentProduct?.description?.length || 0,
-        hasName: !!finalCurrentProduct?.name,
-        wasFetched: !!fetchedCurrentProduct,
-        shopDomain
-      })
-    }
-    
-    // Use fetched products from backend, fallback to products from request (for demo/Next.js app)
-    const allProductsToUse = fetchedProducts.length > 0 ? fetchedProducts : (allProducts || [])
     
     // Detect if user is asking about current product
     // CRITICAL: On product pages, ALWAYS assume questions about "this" refer to current product
@@ -743,19 +642,10 @@ export async function POST(request: NextRequest) {
       productUrl = `https://${shopName}.myshopify.com/products/${finalCurrentProduct.id}`
     }
     
-    let productPageAnalysis = null
-        
-    // Analyze product page if:
-    // 1. User is asking about current product (explicit inquiry), OR
-    // 2. User is on product page and message contains "this" (contextual inquiry)
-    const shouldAnalyzePage = (isProductInquiry || (pageType === "product" && message.toLowerCase().includes("this"))) && finalCurrentProduct
-    
-    // For product inquiries, we'll send URL directly to Gemini for analysis
-    // This is simpler and more reliable than pre-fetching content
-    
-    // ============ CRITICAL FIX: Extract filters from message for recommendations ============
-    // Detect if user is asking for recommendations with filters (price, color, category)
+    // Detect if user is asking for recommendations/search (needs product catalog)
     const isRecommendationQuery = isProductRecommendationQuery(message)
+    const needsProductFiltering = shouldFilterProducts(message)
+    const shouldFetchProducts = isRecommendationQuery || needsProductFiltering || enhancedIntent?.wantsRecommendations
     
     // Extract filters from message (price, color, category)
     interface Filters {
@@ -792,9 +682,40 @@ export async function POST(request: NextRequest) {
         }
       }
       
-      logger.info('[Chat API] Extracted filters from message:', filters)
-      
       return filters
+    }
+    
+    // Fetch products from Shopify only when needed (for recommendations/search)
+    let fetchedProducts: Product[] = []
+    if (shouldFetchProducts && shopDomain) {
+      try {
+        const storefrontToken = await ensureStorefrontToken(shopDomain)
+        if (storefrontToken) {
+          const adapter = new ShopifyProductAdapter(shopDomain, storefrontToken)
+          
+          // Fetch products with limit based on query type
+          const productLimit = needsProductFiltering ? 50 : 250
+          const closelookProducts: CloselookProduct[] = await adapter.getAllProducts({ limit: productLimit })
+          
+          // Convert CloselookProduct to Product format
+          fetchedProducts = closelookProducts.map((cp: CloselookProduct) => ({
+            id: cp.id,
+            name: cp.name,
+            category: cp.category,
+            type: cp.type,
+            color: cp.color,
+            price: cp.price,
+            images: cp.images,
+            description: cp.description,
+            sizes: cp.sizes,
+          }))
+        }
+      } catch (error) {
+        logger.error("Error fetching products from Shopify", { 
+          error: error instanceof Error ? error.message : String(error),
+          shopDomain 
+        })
+      }
     }
     
     // Get filtered products if filters are detected
@@ -810,7 +731,7 @@ export async function POST(request: NextRequest) {
         
         const adapter = new ShopifyProductAdapter(shopDomain, storefrontToken)
         
-        // Fetch all products (or use Shopify search query if we have category)
+        // Fetch products (or use Shopify search query if we have category)
         let allProductsList: CloselookProduct[] = []
         
         if (filters.category) {
@@ -818,16 +739,13 @@ export async function POST(request: NextRequest) {
           const searchQuery = `product_type:${filters.category}`
           allProductsList = await adapter.getProductsByQuery(searchQuery, 50)
         } else {
-          // Fetch all products
+          // Fetch products with limit
           allProductsList = await adapter.getAllProducts({ limit: 50 })
         }
         
         if (!allProductsList || allProductsList.length === 0) {
-          logger.info('[Filter] No products found from Shopify')
           return []
         }
-        
-        logger.info('[Filter] Filtering', allProductsList.length, 'products with filters:', filters)
         
         let filtered = allProductsList.map((cp: CloselookProduct) => ({
           id: cp.id,
@@ -846,7 +764,6 @@ export async function POST(request: NextRequest) {
           filtered = filtered.filter(p => 
             p.price && p.price <= filters.maxPrice!
           )
-          logger.info('[Filter] After price filter (<= $' + filters.maxPrice + '):', filtered.length)
         }
         
         // Filter by category/type
@@ -856,7 +773,6 @@ export async function POST(request: NextRequest) {
             p.category?.toLowerCase().includes(categoryLower) ||
             p.type?.toLowerCase().includes(categoryLower)
           )
-          logger.info('[Filter] After category filter (' + filters.category + '):', filtered.length)
         }
         
         // Filter by color
@@ -867,7 +783,6 @@ export async function POST(request: NextRequest) {
             p.color?.toLowerCase().includes(colorLower) ||
             p.category?.toLowerCase().includes(colorLower)
           )
-          logger.info('[Filter] After color filter (' + filters.color + '):', filtered.length)
         }
         
         return filtered
@@ -876,45 +791,42 @@ export async function POST(request: NextRequest) {
         return []
       }
     }
+    
+    // Use fetched products from backend, fallback to products from request (for demo/Next.js app)
+    const allProductsToUse = fetchedProducts.length > 0 ? fetchedProducts : (allProducts || [])
 
     // SCALABILITY: Use semantic search to retrieve only relevant products
     // This prevents sending entire catalog (e.g., 1000 products) to LLM
-    // IMPORTANT: Always filter products when user is asking for recommendations, search, or product suggestions
-    // This ensures content-aware responses based on actual Shopify catalog
+    // IMPORTANT: Only fetch and filter products when user is asking for recommendations/search
     let relevantProducts: Product[] = []
     let queryIntent: QueryIntent | null = null
     let recommendations: any[] = []
 
     const catalogSize = allProductsToUse.length
     const isLargeCatalog = catalogSize > 50
-    const needsProductFiltering = shouldFilterProducts(message)
     
     // ============ CRITICAL FIX: Apply filters for recommendations ============
     let filteredProducts: Product[] = []
     
-    if (isRecommendationQuery) {
-      logger.info('[Chat API] Detected recommendation query')
-      
-      // Extract filters from message
-      const filters = extractFilters(message)
-      
-      if (Object.keys(filters).length > 0) {
-        logger.info('[Chat API] Applying filters:', filters)
+    // Only fetch/filter products if user is asking for recommendations/search
+    if (shouldFetchProducts) {
+      if (isRecommendationQuery) {
+        // Extract filters from message
+        const filters = extractFilters(message)
         
-        // Get filtered products from Shopify
-        if (shopDomain) {
-          filteredProducts = await getFilteredProducts(shopDomain, filters)
-        } else {
-          // Fallback: filter from existing products
-          filteredProducts = smartFilterProducts(allProductsToUse as Product[], message)
-        }
-        
-        if (filteredProducts.length > 0) {
-          logger.info('[Chat API] Found', filteredProducts.length, 'filtered products')
-          // Use filtered products as relevant products
-          relevantProducts = filteredProducts.slice(0, 10)
-        } else {
-          logger.info('[Chat API] No products found matching filters')
+        if (Object.keys(filters).length > 0) {
+          // Get filtered products from Shopify
+          if (shopDomain) {
+            filteredProducts = await getFilteredProducts(shopDomain, filters)
+          } else {
+            // Fallback: filter from existing products
+            filteredProducts = smartFilterProducts(allProductsToUse as Product[], message)
+          }
+          
+          if (filteredProducts.length > 0) {
+            // Use filtered products as relevant products
+            relevantProducts = filteredProducts.slice(0, 10)
+          }
         }
       }
     }
@@ -926,22 +838,13 @@ export async function POST(request: NextRequest) {
       // Convert current product to Shopify format for intent analysis
       const shopifyCurrentProduct = finalCurrentProduct ? convertToShopifyFormat(finalCurrentProduct) : null
       enhancedIntent = analyzeUserIntent(message, shopifyCurrentProduct, conversationHistory || [])
-      logger.info('[Chat API] Enhanced intent detected:', {
-        type: enhancedIntent.type,
-        wantsRecommendations: enhancedIntent.wantsRecommendations,
-        wantsTicket: enhancedIntent.wantsTicket,
-        ticketStage: enhancedIntent.ticketStage,
-        filters: enhancedIntent.filters
-      })
     } catch (error) {
-      logger.warn('[Chat API] Enhanced intent analysis failed, using fallback', { error: error instanceof Error ? error.message : String(error) })
+      // Enhanced intent analysis failed, will use fallback methods
     }
 
-    // Always filter products when:
-    // 1. User is asking for recommendations/search (needsProductFiltering), OR
-    // 2. Catalog is large (isLargeCatalog)
-    // This ensures we only send relevant products to Gemini, making responses content-aware
-    if (needsProductFiltering || isLargeCatalog || enhancedIntent?.wantsRecommendations) {
+    // Only filter products when user is asking for recommendations/search
+    // This ensures we only send relevant products to LLM, making responses content-aware
+    if (shouldFetchProducts && (needsProductFiltering || isLargeCatalog || enhancedIntent?.wantsRecommendations)) {
       try {
         // Commented out - Google Cloud Gemini API key (switching to Replicate)
         // const apiKey = process.env.GOOGLE_GEMINI_API_KEY || ""
@@ -970,10 +873,25 @@ export async function POST(request: NextRequest) {
         }
 
         // Retrieve only relevant products (top N based on query intent)
-        // For recommendation queries, use higher limit to give Gemini more options
-        const productLimit = queryIntent
-          ? getProductLimitForQuery(queryIntent, catalogSize)
-          : (needsProductFiltering ? 20 : 50) // Default: 20 for filtered queries, 50 for large catalogs
+        // RAG: Filter products BEFORE sending to LLM based on query type
+        let productLimit = 10 // Default limit
+        
+        if (queryIntent) {
+          // Use query intent to determine product limit
+          if (queryIntent.intent === "search") {
+            productLimit = 10 // Search queries: 5-10 products max
+          } else if (queryIntent.intent === "recommendation") {
+            productLimit = 15 // Recommendation queries: 10-15 products max
+          } else if (queryIntent.intent === "question") {
+            productLimit = 3 // General questions: 0-3 products (only if relevant)
+          } else if (queryIntent.intent === "comparison") {
+            productLimit = 4 // Comparison queries: 2-4 products
+          }
+        } else if (needsProductFiltering) {
+          productLimit = 10 // Default for filtered queries
+        } else {
+          productLimit = 5 // Default for general queries
+        }
 
         // Use enhanced smart recommendations if available, otherwise fallback to existing methods
         if (enhancedIntent && enhancedIntent.wantsRecommendations && finalCurrentProduct) {
@@ -992,13 +910,10 @@ export async function POST(request: NextRequest) {
             
             // Convert back to Product format
             relevantProducts = convertProductsFromShopifyFormat(smartRecs)
-            logger.info('[Chat API] Using enhanced smart recommendations:', { count: relevantProducts.length })
           } catch (error) {
-            logger.warn('[Chat API] Smart recommendations failed, using fallback', { error: error instanceof Error ? error.message : String(error) })
             // Fallback to filtered products or semantic search
             if (filteredProducts.length > 0) {
               relevantProducts = filteredProducts.slice(0, productLimit)
-              logger.info('[Chat API] Using filtered products for recommendations')
             } else {
               relevantProducts = await retrieveRelevantProducts(allProductsToUse as Product[], message, {
                 maxProducts: productLimit,
@@ -1009,7 +924,6 @@ export async function POST(request: NextRequest) {
           }
         } else if (filteredProducts.length > 0) {
           relevantProducts = filteredProducts.slice(0, productLimit)
-          logger.info('[Chat API] Using filtered products for recommendations')
         } else {
           relevantProducts = await retrieveRelevantProducts(allProductsToUse as Product[], message, {
             maxProducts: productLimit,
@@ -1018,11 +932,6 @@ export async function POST(request: NextRequest) {
           })
         }
 
-        logger.info(`Retrieved ${relevantProducts.length} relevant products from catalog of ${catalogSize} products`, {
-          queryIntent: queryIntent?.intent,
-          needsFiltering: needsProductFiltering,
-          isLargeCatalog,
-        })
 
         // Convert to recommendations format
         if (relevantProducts.length > 0) {
@@ -1040,19 +949,18 @@ export async function POST(request: NextRequest) {
         // Fallback to simple filter
         relevantProducts = smartFilterProducts(allProductsToUse as Product[], message).slice(0, 20)
       }
-    } else if (allProductsToUse.length > 0) {
+    } else if (shouldFetchProducts && allProductsToUse.length > 0) {
       // For small catalogs and non-filtering queries (general questions, order queries, etc.),
       // still include products for context but limit to prevent token overflow
-      // If catalog is small, sending all products is fine (they'll all be relevant)
       const maxProductsForSmallCatalog = Math.min(allProductsToUse.length, 50)
       relevantProducts = allProductsToUse.slice(0, maxProductsForSmallCatalog)
-      logger.debug(`Using all products from small catalog (${allProductsToUse.length} products)`)
     }
 
     // Fetch customer information and order data if needed
     let customerInfo: any = null
     let orderData: any = null
     let policies: any = null
+    let cartData: any = null
 
     // Fetch customer information when customer ID is available (always fetch for context)
     // NOTE: shop domain should come from Shopify context (window.Shopify.shop) which is always myshopify.com
@@ -1061,7 +969,6 @@ export async function POST(request: NextRequest) {
     const shopForOrders = shopDomain || shop
     
     // Always fetch customer information if we have customer ID (for chatbot awareness)
-    // Even if fetching fails, we'll use customerName from widget as fallback
     if (shopForOrders && customerInternal?.id) {
       try {
         const normalizedShop = shopForOrders.includes('.myshopify.com') 
@@ -1071,66 +978,38 @@ export async function POST(request: NextRequest) {
         
         if (session && session.accessToken) {
           try {
-            // Fetch customer information by ID
             customerInfo = await fetchCustomerById(session, customerInternal.id)
-            if (customerInfo) {
-              logger.info("Customer information fetched successfully", {
-                customerId: customerInternal.id,
-                email: customerInfo.email,
-                name: `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim(),
-                numberOfOrders: customerInfo.numberOfOrders
-              })
-            } else {
-              logger.warn("Customer information not found by ID, will use customerName from widget", {
-                customerId: customerInternal.id
-              })
-            }
-          } catch (customerError) {
-            logger.warn("Failed to fetch customer information by ID", { 
-              error: customerError instanceof Error ? customerError.message : String(customerError),
-              customerId: customerInternal.id
-            })
-            // Try fetching by email as fallback
-            if (customerInternal.email) {
+            
+            // Try fetching by email as fallback if ID fetch failed
+            if (!customerInfo && customerInternal.email) {
               try {
                 customerInfo = await fetchCustomerByEmail(session, customerInternal.email)
-                if (customerInfo) {
-                  logger.info("Customer information fetched by email successfully", {
-                    email: customerInternal.email
-                  })
-                }
               } catch (emailError) {
-                logger.warn("Failed to fetch customer by email", { 
-                  error: emailError instanceof Error ? emailError.message : String(emailError) 
+                logger.error("[SHOPIFY API] Failed to fetch customer by email", { 
+                  error: emailError instanceof Error ? emailError.message : String(emailError),
+                  email: customerInternal.email
                 })
               }
             }
+          } catch (customerError) {
+            logger.error("[SHOPIFY API] Failed to fetch customer information", { 
+              error: customerError instanceof Error ? customerError.message : String(customerError),
+              customerId: customerInternal.id,
+              shop: normalizedShop
+            })
           }
-        } else {
-          logger.debug("No session or access token for customer info fetch, will use customerName from widget", {
-            hasSession: !!session,
-            hasAccessToken: !!session?.accessToken
-          })
         }
       } catch (error) {
-        logger.warn("Error fetching customer information", { 
-          error: error instanceof Error ? error.message : String(error) 
+        logger.error("[SHOPIFY API] Error in customer information fetch flow", { 
+          error: error instanceof Error ? error.message : String(error),
+          shop: shopForOrders
         })
-        // Continue without customer info - will use customerName from widget
       }
-    } else {
-      logger.debug("No shop domain or customer ID for fetching customer info, will use customerName from widget", {
-        hasShop: !!shopForOrders,
-        hasCustomerId: !!customerInternal?.id
-      })
     }
 
     // Fetch orders only if query is about orders/account and we have customer info or order number
     if (shopForOrders && shouldFetchOrders) {
       try {
-        // Get Shopify session for Admin API
-        // Session key is myshopify.com domain (from OAuth)
-        // Normalize shop domain to myshopify.com format for session lookup
         const normalizedShop = shopForOrders.includes('.myshopify.com') 
           ? shopForOrders 
           : shopForOrders.replace(/^https?:\/\//, '').replace(/\/$/, '')
@@ -1145,8 +1024,10 @@ export async function POST(request: NextRequest) {
                   orderData = { order }
                 }
               } catch (orderError) {
-                logger.warn("Failed to fetch order by number", { 
-                  error: orderError instanceof Error ? orderError.message : String(orderError) 
+                logger.error("[SHOPIFY API] Failed to fetch order by number", { 
+                  error: orderError instanceof Error ? orderError.message : String(orderError),
+                  orderNumber: queryType.orderNumber,
+                  shop: normalizedShop
                 })
               }
             }
@@ -1156,14 +1037,12 @@ export async function POST(request: NextRequest) {
                 const orders = await fetchCustomerOrdersById(session, customerInternal.id, 10)
                 if (orders.length > 0) {
                   orderData = { orders }
-                  logger.info("Orders fetched by customer ID", { 
-                    customerId: customerInternal.id,
-                    orderCount: orders.length 
-                  })
                 }
               } catch (idError) {
-                logger.warn("Failed to fetch orders by customer ID", { 
-                  error: idError instanceof Error ? idError.message : String(idError) 
+                logger.error("[SHOPIFY API] Failed to fetch orders by customer ID", { 
+                  error: idError instanceof Error ? idError.message : String(idError),
+                  customerId: customerInternal.id,
+                  shop: normalizedShop
                 })
                 // Fallback to email if available
                 if (customerInternal.email) {
@@ -1173,8 +1052,9 @@ export async function POST(request: NextRequest) {
                       orderData = { orders }
                     }
                   } catch (emailError) {
-                    logger.warn("Failed to fetch orders by customer email", { 
-                      error: emailError instanceof Error ? emailError.message : String(emailError) 
+                    logger.error("[SHOPIFY API] Failed to fetch orders by customer email", { 
+                      error: emailError instanceof Error ? emailError.message : String(emailError),
+                      email: customerInternal.email
                     })
                   }
                 }
@@ -1188,8 +1068,9 @@ export async function POST(request: NextRequest) {
                   orderData = { orders }
                 }
               } catch (emailError) {
-                logger.warn("Failed to fetch orders by customer email", { 
-                  error: emailError instanceof Error ? emailError.message : String(emailError) 
+                logger.error("[SHOPIFY API] Failed to fetch orders by customer email", { 
+                  error: emailError instanceof Error ? emailError.message : String(emailError),
+                  email: customerInternal.email
                 })
               }
             }
@@ -1197,11 +1078,10 @@ export async function POST(request: NextRequest) {
             else if (customerInternal?.accessToken) {
               try {
                 const { fetchCustomerOrdersFromStorefront } = await import("@/lib/shopify/storefront-client")
-                // Get storefront token from env or session
                 const storefrontToken = process.env.SHOPIFY_STOREFRONT_TOKEN || ""
                 if (storefrontToken && customerInternal.accessToken) {
                   const storefrontOrders = await fetchCustomerOrdersFromStorefront(
-                    shop,
+                    shopForOrders,
                     storefrontToken,
                     customerInternal.accessToken,
                     10
@@ -1211,14 +1091,13 @@ export async function POST(request: NextRequest) {
                   }
                 }
               } catch (storefrontError) {
-                logger.warn("Failed to fetch orders from storefront API", { 
-                  error: storefrontError instanceof Error ? storefrontError.message : String(storefrontError) 
+                logger.error("[SHOPIFY API] Failed to fetch orders from storefront API", { 
+                  error: storefrontError instanceof Error ? storefrontError.message : String(storefrontError)
                 })
               }
             }
-            // Option 3: Extract email from query if mentioned
+            // Option 5: Extract email from query if mentioned
             else if (queryType.email) {
-              // Validate email format before API call
               const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
               if (emailPattern.test(queryType.email)) {
                 try {
@@ -1227,24 +1106,31 @@ export async function POST(request: NextRequest) {
                     orderData = { orders }
                   }
                 } catch (emailError) {
-                  logger.warn("Failed to fetch orders by email", { 
-                    error: emailError instanceof Error ? emailError.message : String(emailError),
-                    email: queryType.email.substring(0, 10) + "..." // Log partial email for debugging
+                  logger.error("[SHOPIFY API] Failed to fetch orders by query email", { 
+                    error: emailError instanceof Error ? emailError.message : String(emailError)
                   })
                 }
               }
             }
-          } else {
-            logger.debug("No session found for shop, skipping order fetch", { 
-              shop: shop.substring(0, 30) 
-            })
           }
       } catch (error) {
-        logger.warn("Failed to fetch order data", { 
+        logger.error("[SHOPIFY API] Error in order fetch flow", { 
           error: error instanceof Error ? error.message : String(error),
-          shop: shop?.substring(0, 30) // Log partial shop for debugging
+          shop: shopForOrders?.substring(0, 30)
         })
-        // Don't fail the entire request, continue without order data
+      }
+    }
+
+    // Fetch cart only if user asks about it
+    if (shouldFetchCart) {
+      try {
+        // TODO: Implement cart fetching from Shopify Storefront API or /cart.js endpoint
+        // For now, cartData will remain null and the chatbot will indicate cart is not available
+      } catch (error) {
+        logger.error("[SHOPIFY API] Error in cart fetch flow", { 
+          error: error instanceof Error ? error.message : String(error),
+          shop: shopForOrders
+        })
       }
     }
 
@@ -1316,11 +1202,12 @@ export async function POST(request: NextRequest) {
         email: customerInternal.email,
         logged_in: !!customerInternal.id
       } : null)),
-      cart: context?.cart || null,
+      cart: cartData || null, // Only include cart if fetched when user asked
     }
     
     // Use enhanced context building from prompts.js
     // Build context in the format expected by buildContextPrompt
+    const finalCart = cartData || null // Only include cart if fetched when user asked
     const promptContext = {
       pageType: pageType,
       currentProduct: finalCurrentProduct ? {
@@ -1372,13 +1259,12 @@ export async function POST(request: NextRequest) {
         id: customerInternal.id,
         email: customerInternal.email
       } : undefined),
-      cart: context?.cart || null
+      cart: finalCart
     }
 
     // Try new enhanced context building, fallback to old method
     try {
       contextMessage = buildContextPrompt(promptContext, message)
-      logger.info('[Chat API] Using enhanced context prompt')
     } catch (error) {
       logger.warn('[Chat API] Enhanced context building failed, using fallback', { error: error instanceof Error ? error.message : String(error) })
       // Fallback to original buildContextString
@@ -1460,6 +1346,54 @@ export async function POST(request: NextRequest) {
       contextMessage = contextMessage + orderContext
     }
 
+    // ============ CRITICAL FIX: Add cart information to context (only when user asks) ============
+    // Only include cart information when user asks about it and we have fetched it
+    if (queryType.isCart) {
+      if (finalCart && finalCart.item_count > 0) {
+        let cartContext = `\n\n═══════════════════════════════════════════════════════════\n`
+        cartContext += `🛒 CUSTOMER'S SHOPPING CART (CURRENT ITEMS):\n`
+        cartContext += `═══════════════════════════════════════════════════════════\n\n`
+        cartContext += `TOTAL ITEMS: ${finalCart.item_count}\n`
+        cartContext += `TOTAL PRICE: ${(finalCart.total_price / 100).toFixed(2)} ${finalCart.currency || 'USD'}\n\n`
+        
+        if (finalCart.items && finalCart.items.length > 0) {
+          cartContext += `ITEMS IN CART:\n`
+          finalCart.items.forEach((item: any, index: number) => {
+            cartContext += `  ${index + 1}. ${item.title || 'Item'}\n`
+            cartContext += `     Quantity: ${item.quantity || 1}\n`
+            if (item.price) {
+              const itemPrice = typeof item.price === 'number' ? (item.price / 100).toFixed(2) : item.price
+              cartContext += `     Price: ${itemPrice} ${finalCart.currency || 'USD'}\n`
+            }
+            if (item.line_price) {
+              const linePrice = typeof item.line_price === 'number' ? (item.line_price / 100).toFixed(2) : item.line_price
+              cartContext += `     Line Total: ${linePrice} ${finalCart.currency || 'USD'}\n`
+            }
+            cartContext += `\n`
+          })
+        }
+        
+        cartContext += `⚠️ CRITICAL: When the customer asks about their cart, basket, bag, or items in their cart, you MUST use this information.\n`
+        cartContext += `- The customer has ${finalCart.item_count} item(s) in their cart\n`
+        cartContext += `- Total cart value: ${(finalCart.total_price / 100).toFixed(2)} ${finalCart.currency || 'USD'}\n`
+        cartContext += `- NEVER say the cart is empty when it has items - you have direct access to this information\n`
+        cartContext += `- If the customer asks "anything in cart?" or "what's in my cart?", list the items above\n\n`
+        
+        contextMessage = contextMessage + cartContext
+      } else {
+        // Cart query detected but cart is empty or not available
+        let cartContext = `\n\n═══════════════════════════════════════════════════════════\n`
+        cartContext += `🛒 CUSTOMER'S SHOPPING CART:\n`
+        cartContext += `═══════════════════════════════════════════════════════════\n\n`
+        if (finalCart && finalCart.item_count === 0) {
+          cartContext += `The customer's cart is currently empty (no items).\n\n`
+        } else {
+          cartContext += `Cart information is not available at this time.\n\n`
+        }
+        contextMessage = contextMessage + cartContext
+      }
+    }
+
     // Add additional context for Gemini
     if (pageType === "home") {
       contextMessage = `\n\nPAGE CONTEXT: The customer is browsing the home page/catalog.\n` + contextMessage
@@ -1534,57 +1468,17 @@ export async function POST(request: NextRequest) {
         // Combine with context string from buildContextString
         contextMessage = productDetails + '\n\n' + contextMessage
         
-        // Log what we're sending to Gemini
-        logger.info(`Product context message for Gemini`, {
-          hasId: !!finalCurrentProduct.id,
-          hasName: !!finalCurrentProduct.name,
-          hasDescription: !!finalCurrentProduct.description,
-          descriptionLength: finalCurrentProduct.description?.length || 0,
-          hasCategory: !!finalCurrentProduct.category,
-          hasType: !!finalCurrentProduct.type,
-          hasPrice: !!finalCurrentProduct.price,
-          hasImages: !!(finalCurrentProduct.images && finalCurrentProduct.images.length > 0),
-          imageCount: finalCurrentProduct.images?.length || 0,
-          shopDomain
-        })
       } else {
-        // Even without product data, clarify context
-        logger.warn(`No product data available for product page context`, {
-          pageType,
-          hasCurrentProduct: !!finalCurrentProduct,
-          currentProductId: finalCurrentProduct?.id,
-          currentProductName: finalCurrentProduct?.name,
-          shopDomain
-        })
         contextMessage = `\n\nPAGE CONTEXT: The customer is viewing a specific product page.\n\nCRITICAL CONTEXT RULE: When the customer is on a product page, ANY mention of "this", "this product", "this item", "it", or questions about usage, features, durability, suitability, everyday use, daily use, etc., ALWAYS refers to the CURRENT PRODUCT shown on this page. NEVER ask which product they're referring to - always assume they mean the current product.\n` + contextMessage
       }
       
       // FALLBACK PIPELINE: If primary pipeline (Shopify API fetch) didn't work and user is asking about product
       // Try URL-based analysis as fallback
-      // This only runs if we don't have complete product data from Shopify
       const hasCompleteProductData = finalCurrentProduct && finalCurrentProduct.name && finalCurrentProduct.description && finalCurrentProduct.images && finalCurrentProduct.images.length > 0
       
       if (isProductInquiry && productUrl && !hasCompleteProductData) {
-        logger.info("Primary pipeline incomplete, attempting fallback URL analysis", { 
-          hasName: !!finalCurrentProduct?.name,
-          hasDescription: !!finalCurrentProduct?.description,
-          hasImages: !!(finalCurrentProduct?.images && finalCurrentProduct.images.length > 0),
-          productUrl 
-        })
-        
         // Try to fetch page content as fallback
-        // Commented out - Google Cloud Gemini API call for product page analysis
         try {
-          // const apiKey = process.env.GOOGLE_GEMINI_API_KEY
-          // if (apiKey) {
-          //   productPageAnalysis = await analyzeProductPage(productUrl, apiKey).catch((error) => {
-          //     logger.warn("Fallback product page analysis failed", { 
-          //       error: error instanceof Error ? error.message : String(error),
-          //       productUrl 
-          //     })
-          //     return null
-          //   })
-          // }
           // Disabled - product page analysis using Google Cloud Gemini API
         } catch (error) {
           logger.warn("Error in fallback product page analysis", { error })
@@ -1727,26 +1621,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Add customer name reminder at the end (redundant but ensures it's visible)
-    if (customerNameToUse) {
-      contextMessage += `\n\n═══════════════════════════════════════════════════════════\n`
-      contextMessage += `🔴 CUSTOMER NAME REMINDER:\n`
-      contextMessage += `═══════════════════════════════════════════════════════════\n`
-      contextMessage += `The customer's name is: "${customerNameToUse}"\n`
-      contextMessage += `You MUST use this name when the customer asks "What's my name?" or similar questions.\n`
-      contextMessage += `You have direct access to this information - never say you don't have it.\n`
-      contextMessage += `═══════════════════════════════════════════════════════════\n`
-    }
 
-    // SCALABILITY: Only send relevant products to LLM, not entire catalog
-    // For large catalogs, we've already filtered to top N relevant products
-    const productsToShow = relevantProducts.length > 0 ? relevantProducts : (allProducts || [])
+    // SCALABILITY: Only send relevant products to LLM when needed
+    // RAG: Only include products for recommendation/search queries, not for order/policy questions
+    const isOrderOrPolicyQuery = queryType.isOrder || queryType.isPolicy || queryType.isAccount
     
-    // Limit products sent to LLM to prevent token overflow
-    const maxProductsForPrompt = isLargeCatalog ? 20 : productsToShow.length
-    const productsForPrompt = productsToShow.slice(0, maxProductsForPrompt)
-    
-    if (productsForPrompt.length > 0) {
+    if (!isOrderOrPolicyQuery && shouldFetchProducts && relevantProducts.length > 0) {
+      // Only include products for recommendation/search queries
+      const productsForPrompt = relevantProducts.slice(0, productLimit || 10)
+      
       contextMessage += `\n\nAVAILABLE PRODUCTS FOR RECOMMENDATIONS (${productsForPrompt.length} of ${catalogSize} total products):\n${productsForPrompt
         .map((p: any) => {
           const sizeInfo = p.sizes && p.sizes.length > 0 ? `, Available Sizes: ${p.sizes.join(", ")}` : ""
@@ -1779,17 +1662,6 @@ export async function POST(request: NextRequest) {
       systemPrompt += `\n\n🔴 CRITICAL REMINDER: The customer's name is "${customerNameForPrompt}". This information is available to you in the context message below. When the customer asks about their name, you MUST tell them their name is "${customerNameForPrompt}". Never say you don't have access to this information.`
     }
     
-    // CRITICAL: If we're on a product page and have product data, emphasize it strongly
-    if (pageType === "product" && finalCurrentProduct && (finalCurrentProduct.id || finalCurrentProduct.name)) {
-      systemPrompt += `\n\n🔴 CRITICAL: THE CUSTOMER IS VIEWING A SPECIFIC PRODUCT PAGE.\n`
-      systemPrompt += `🔴 PRODUCT DATA IS PROVIDED IN THE CONTEXT MESSAGE BELOW.\n`
-      systemPrompt += `🔴 WHEN THE CUSTOMER ASKS "Tell me more about this product" OR ANY QUESTION ABOUT "this product", "this item", "it", etc.,\n`
-      systemPrompt += `🔴 YOU MUST USE THE PRODUCT INFORMATION PROVIDED IN THE CONTEXT MESSAGE TO ANSWER.\n`
-      systemPrompt += `🔴 DO NOT say you're having trouble accessing product details - THE PRODUCT DATA IS IN THE CONTEXT MESSAGE.\n`
-      systemPrompt += `🔴 DO NOT ask "which product?" - THEY ARE VIEWING THE PRODUCT SHOWN IN THE CONTEXT MESSAGE.\n`
-      systemPrompt += `🔴 PROVIDE DETAILED, SPECIFIC INFORMATION ABOUT THE PRODUCT USING THE DATA PROVIDED.\n\n`
-    }
-    
     // Enhance system prompt based on query intent and available products
     // This ensures Gemini understands what type of response to give
     if (queryIntent) {
@@ -1820,13 +1692,28 @@ export async function POST(request: NextRequest) {
     if (sessionId) {
       try {
         const storedHistory = await getConversationHistory(sessionId)
-        if (storedHistory && storedHistory.length > history.length) {
-          history = storedHistory
+        if (storedHistory && storedHistory.length > 0) {
+          // Merge provided history with stored history (prefer stored if longer)
+          if (storedHistory.length > history.length) {
+            history = storedHistory
+          } else if (history.length > 0) {
+            // If provided history is longer, use it but merge unique messages
+            const mergedHistory = [...storedHistory]
+            history.forEach((msg: any) => {
+              if (!mergedHistory.some((m: any) => m.content === msg.content && m.role === msg.role)) {
+                mergedHistory.push(msg)
+              }
+            })
+            history = mergedHistory
+          }
         }
       } catch (error) {
         logger.warn('Failed to load conversation history from Redis', { error })
       }
     }
+    
+    // Limit history to last 5 messages to prevent token overflow
+    history = history.slice(-5)
     
     // Use the message as-is for primary pipeline (product data is already in context)
     // Only add URL to user message if primary pipeline failed and we're using fallback
@@ -1835,26 +1722,6 @@ export async function POST(request: NextRequest) {
     if (isProductInquiry && productUrl && !hasCompleteProductData) {
       // Fallback: add URL to user message only if we don't have complete product data
       userMessage = `${message}\n\n[IMPORTANT: Please fetch and analyze the product page at this URL to answer: ${productUrl}]`
-      logger.info("Using fallback: Added product URL to user message", { productUrl, hasCompleteProductData })
-    } else if (isProductInquiry && hasCompleteProductData) {
-      logger.info("Using primary pipeline: Product data fetched from Shopify API", { 
-        productName: finalCurrentProduct.name,
-        hasDescription: !!finalCurrentProduct.description,
-        imageCount: finalCurrentProduct.images?.length || 0
-      })
-    }
-    
-    // CRITICAL: Ensure context message is always included, especially for product pages
-    // Log the context message being sent to Gemini for debugging
-    if (pageType === "product" && isProductInquiry) {
-      logger.info(`Sending product inquiry to Gemini`, {
-        contextMessageLength: contextMessage.length,
-        hasProductData: !!finalCurrentProduct,
-        productName: finalCurrentProduct?.name,
-        productId: finalCurrentProduct?.id,
-        userMessage: userMessage.substring(0, 100),
-        shopDomain
-      })
     }
     
     // Build the complete system instruction with customer information
@@ -1862,34 +1729,14 @@ export async function POST(request: NextRequest) {
     let completeSystemInstruction = systemPrompt
     
     // Add customer name reminder at the top if available
-    // CRITICAL: Always include customer name prominently if available
     if (customerNameForPrompt) {
       completeSystemInstruction = `🔴 CRITICAL INSTRUCTION - READ THIS FIRST:\n\nThe customer's name is "${customerNameForPrompt}".\n\nWhen the customer asks "What's my name?" or "Do you know my name?", you MUST answer directly: "Your name is ${customerNameForPrompt}".\n\nNEVER say:\n- "I don't have access to that information"\n- "I have no memory of past conversations"\n- "I don't know your name"\n\nYou DO have access to this information - it's provided in the context below.\n\nAnswer direct questions directly. Do NOT give product recommendations when asked about name, account, or orders.\n\nUse the customer's name naturally in your responses when appropriate to personalize the conversation.\n\n═══════════════════════════════════════════════════════════\n\n` + completeSystemInstruction
-      
-      logger.info('[Chat API] Customer name included in system prompt', { 
-        customerName: customerNameForPrompt 
-      })
-    } else {
-      logger.debug('[Chat API] No customer name available for system prompt')
     }
     
     // Combine system prompt with context message
     // The context message already has customer info at the top, so this ensures it's visible
     const fullContext = completeSystemInstruction + "\n\n" + contextMessage
     
-    // Log the full context being sent (for debugging - truncated)
-    if (pageType === "product" && finalCurrentProduct) {
-      logger.info('[Chat API] Full context being sent to Replicate', {
-        hasCustomerName: !!customerNameForPrompt,
-        customerName: customerNameForPrompt || "N/A",
-        hasProduct: !!finalCurrentProduct,
-        productId: finalCurrentProduct.id,
-        productName: finalCurrentProduct.name,
-        contextLength: fullContext.length,
-        systemInstructionLength: completeSystemInstruction.length,
-        contextMessageLength: contextMessage.length
-      })
-    }
     
     // Commented out - Google Cloud Gemini API message format
     // const messages = [
@@ -1955,42 +1802,26 @@ export async function POST(request: NextRequest) {
         ),
       ]) as any
       
-      // Log the raw result for debugging
-      logger.debug("Replicate API raw result", {
-        resultType: typeof result,
-        isAsyncIterator: result && typeof result[Symbol.asyncIterator] === 'function',
-        isString: typeof result === 'string',
-        isArray: Array.isArray(result),
-        hasText: !!result?.text,
-        hasOutput: !!result?.output,
-        resultKeys: result && typeof result === 'object' ? Object.keys(result) : undefined
-      })
-      
       // Replicate returns a stream/iterator for text models, so we need to collect the output
       let fullResponse = ""
       if (result && typeof result[Symbol.asyncIterator] === 'function') {
         // Handle streaming response
-        logger.debug("Processing streaming response from Replicate")
         try {
           for await (const chunk of result) {
             // Handle different chunk formats
             if (typeof chunk === 'string') {
               fullResponse += chunk
             } else if (chunk && typeof chunk === 'object') {
-              // Some Replicate models return objects with text property
-              // Check for common properties: text, output, content, response
               const chunkText = chunk.text || chunk.output || chunk.content || chunk.response
               if (chunkText) {
                 fullResponse += typeof chunkText === 'string' ? chunkText : String(chunkText)
               } else {
-                // If no text property, try to stringify the object
                 fullResponse += JSON.stringify(chunk)
               }
             } else if (chunk !== null && chunk !== undefined) {
               fullResponse += String(chunk)
             }
           }
-          logger.debug("Streaming response collected", { length: fullResponse.length })
         } catch (streamError) {
           logger.error("Error processing stream", { 
             error: streamError instanceof Error ? streamError.message : String(streamError) 
@@ -2001,11 +1832,8 @@ export async function POST(request: NextRequest) {
           }
         }
       } else if (typeof result === 'string') {
-        // Handle string response
         fullResponse = result
-        logger.debug("Received string response", { length: fullResponse.length })
       } else if (Array.isArray(result)) {
-        // Handle array response
         fullResponse = result.map(chunk => {
           if (typeof chunk === 'string') return chunk
           if (chunk && typeof chunk === 'object') {
@@ -2013,20 +1841,10 @@ export async function POST(request: NextRequest) {
           }
           return String(chunk)
         }).join('')
-        logger.debug("Received array response", { length: fullResponse.length, arrayLength: result.length })
       } else if (result && typeof result === 'object') {
-        // Try to extract text from response object
         fullResponse = result.text || result.output || result.content || result.response || String(result)
-        logger.debug("Received object response", { 
-          length: fullResponse.length,
-          hasText: !!result.text,
-          hasOutput: !!result.output,
-          hasContent: !!result.content
-        })
       } else {
-        // Fallback: convert to string
         fullResponse = String(result || "")
-        logger.debug("Received unknown format, converted to string", { length: fullResponse.length })
       }
       
       text = fullResponse.trim()
@@ -2035,16 +1853,10 @@ export async function POST(request: NextRequest) {
       if (!text || typeof text !== "string" || text.length === 0) {
         logger.error("Invalid AI response format", {
           textLength: text?.length || 0,
-          textType: typeof text,
-          fullResponseLength: fullResponse.length,
-          fullResponseType: typeof fullResponse,
-          resultType: typeof result,
-          resultPreview: result && typeof result === 'object' ? JSON.stringify(result).substring(0, 200) : String(result).substring(0, 200)
+          textType: typeof text
         })
         throw new Error("Invalid AI response format: empty or non-string response")
       }
-      
-      logger.debug("AI response successfully extracted", { textLength: text.length })
     } catch (aiError) {
       logger.error("AI service error", { 
         error: aiError instanceof Error ? aiError.message : String(aiError) 
@@ -2109,7 +1921,6 @@ export async function POST(request: NextRequest) {
           text = formatTicketResponse(text, ticketId)
           ticketCreated = true
           ticketMessage = `✅ Support ticket created! Reference #${ticketId}. Our team will contact you within 24 hours.`
-          logger.info('[Chat API] Ticket created via enhanced system:', { ticketId })
         } catch (error) {
           logger.error('[Chat API] Failed to create ticket via enhanced system', { error: error instanceof Error ? error.message : String(error) })
           // Continue with fallback ticket creation
@@ -2134,7 +1945,6 @@ export async function POST(request: NextRequest) {
         )
         ticketCreated = true
         ticketMessage = `✅ Support ticket created! Reference #${ticketId}. Our team will contact you within 24 hours.`
-        logger.info('[Chat API] Ticket created via intent analysis:', { ticketId })
       } catch (error) {
         logger.error('[Chat API] Failed to create ticket via intent', { error: error instanceof Error ? error.message : String(error) })
       }
@@ -2181,7 +1991,6 @@ export async function POST(request: NextRequest) {
                 if (result.success) {
                   ticketCreated = true
                   ticketMessage = "✅ I've created a support ticket for you! Our team will review your issue and get back to you soon. Is there anything else I can help you with?"
-                  logger.info("Ticket created successfully", { shop: shop.substring(0, 20) })
                 } else {
                   logger.warn("Failed to create ticket", { 
                     error: result.error,
@@ -2204,10 +2013,7 @@ export async function POST(request: NextRequest) {
             logger.error("Critical error in ticket creation", { 
               error: error instanceof Error ? error.message : String(error) 
             })
-            // Don't expose error details to user
           }
-        } else {
-          logger.debug("Issue description too short for ticket creation", { issueLength: issue?.length || 0 })
         }
       }
     }
@@ -2240,10 +2046,40 @@ export async function POST(request: NextRequest) {
       responseMessage = `${responseMessage}\n\n✅ ${ticketMessage}`
     }
 
+    // Save conversation history to Redis for memory
+    if (sessionId) {
+      try {
+        // Build updated history with current exchange
+        const updatedHistory = [
+          ...history,
+          { role: "user", content: message },
+          { role: "assistant", content: responseMessage }
+        ]
+        
+        // Keep only last 10 messages to prevent token overflow
+        const historyToSave = updatedHistory.slice(-10)
+        
+        await setConversationHistory(sessionId, historyToSave)
+      } catch (error) {
+        logger.warn('Failed to save conversation history to Redis', { error })
+      }
+    }
+
+    // Include customer info in response if available (for frontend personalization)
+    const customerInfoForResponse = customerInfo ? {
+      name: `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim() || customerName,
+      firstName: customerInfo.firstName,
+      lastName: customerInfo.lastName,
+      email: customerInfo.email,
+    } : customerName ? {
+      name: customerName,
+    } : null
+
     const response = NextResponse.json({
       message: responseMessage,
       recommendations: finalRecommendations,
       ticketCreated,
+      customer: customerInfoForResponse, // Include customer info for frontend personalization
     })
     
     return addCorsHeaders(response, request)
