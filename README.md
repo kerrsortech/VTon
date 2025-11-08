@@ -2,14 +2,6 @@
 
 A revolutionary virtual try-on system powered by AI that creates photoreal images of customers wearing products. This is a Shopify app that can be installed in any Shopify store.
 
-## 🎉 Production Ready!
-
-**Your Closelook plugin is fully production-ready!** 
-
-**👉 [START DEPLOYING NOW →](./DEPLOY.md)**
-
-Follow the complete deployment guide to get your plugin live in under 1 hour.
-
 ## Features
 
 - **Floating Upload Widget**: Easy-to-use widget that floats on product pages
@@ -17,7 +9,6 @@ Follow the complete deployment guide to get your plugin live in under 1 hour.
 - **AI Shopping Assistant**: Chatbot for product recommendations and questions
 - **Model/User Toggle**: Switch between model photos and personalized try-on results
 - **Download & Share**: Download try-on images and share on social media
-- **Demo Store**: Complete demo website to test and see the UI
 
 ## Tech Stack
 
@@ -28,136 +19,144 @@ Follow the complete deployment guide to get your plugin live in under 1 hour.
 
 ## Getting Started
 
-1. **Install dependencies**:
-   \`\`\`bash
-   pnpm install
-   \`\`\`
+### 1. Install Dependencies
 
-2. **Set up environment variables**:
-   Create a `.env.local` file in the root directory:
-   \`\`\`bash
-   # Shopify App Configuration
-   SHOPIFY_API_KEY=your_shopify_api_key
-   SHOPIFY_API_SECRET=your_shopify_api_secret
-   SHOPIFY_APP_URL=http://localhost:3000
-   SHOPIFY_SCOPES=read_products,read_content
-   SHOPIFY_SESSION_SECRET=generate_a_random_secret_key
+```bash
+pnpm install
+```
 
-   # AI Services
-   REPLICATE_API_TOKEN=your_api_token_here
-   GOOGLE_GEMINI_API_KEY=your_api_key_here
+### 2. Set Up Environment Variables
 
-   # Optional
-   ENABLE_STRUCTURED_LOGGING=true
-   \`\`\`
+Create a `.env.local` file in the root directory:
 
-3. **Run the development server**:
-   \`\`\`bash
-   pnpm dev
-   \`\`\`
+```bash
+# Shopify App Configuration
+SHOPIFY_API_KEY=your_shopify_api_key
+SHOPIFY_API_SECRET=your_shopify_api_secret
+SHOPIFY_APP_URL=http://localhost:3000
+SHOPIFY_SCOPES=read_products,read_content,read_orders,read_customers,write_customers
+SHOPIFY_SESSION_SECRET=generate_a_random_secret_key
 
-4. **Test the demo store**:
-   Navigate to `http://localhost:3000` to see the demo UI with chat button
+# Database
+DATABASE_URL=your_postgresql_connection_string
 
-## Deployment
+# AI Services
+REPLICATE_API_TOKEN=your_api_token_here
+GOOGLE_GEMINI_API_KEY=your_api_key_here
 
-**📘 [Complete Deployment Guide →](./DEPLOY.md)**
+# Optional
+ENABLE_STRUCTURED_LOGGING=true
+```
 
-Follow the step-by-step guide in `DEPLOY.md` to deploy your plugin to Shopify stores in under 1 hour. Perfect for junior developers!
+### 3. Initialize Database
 
-For more detailed information:
-- **Shopify account setup**: [SHOPIFY_ACCOUNT_SETUP.md](./SHOPIFY_ACCOUNT_SETUP.md) - **Start here if you need a Shopify Partners account!**
-- Database setup: [DATABASE_SETUP.md](./DATABASE_SETUP.md)
-- Dashboard setup: [DASHBOARD_SETUP.md](./DASHBOARD_SETUP.md)
-- Production readiness: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md)
+```bash
+pnpm db:init
+pnpm db:migrate
+```
+
+### 4. Run Development Server
+
+```bash
+# Run Next.js app
+pnpm dev
+
+# Or run with Shopify CLI
+pnpm shopify:dev
+```
 
 ## Project Structure
 
-\`\`\`
+```
 ├── app/
-│   ├── api/
-│   │   ├── try-on/          # Main try-on generation endpoint
-│   │   ├── chat/            # Chatbot endpoint
-│   │   ├── products/       # Products API (for demo)
-│   │   └── shopify/        # Shopify OAuth and webhooks
-│   ├── product/[id]/       # Demo product detail pages
-│   ├── admin/              # Admin dashboard for Shopify app
-│   └── page.tsx            # Demo homepage
-├── components/
-│   ├── closelook-widget.tsx      # Floating upload widget (UI for Shopify)
-│   ├── global-chatbot.tsx        # Chat button and chatbot (UI for Shopify)
-│   ├── product-view.tsx          # Product page with try-on
-│   └── ui/                       # Shadcn UI components
-├── shopify-app/
-│   └── blocks/                   # Shopify theme app extensions
-│       ├── closelook-widget/     # Try-on widget block
-│       └── closelook-chatbot/    # Chatbot block
-├── widgets/
-│   ├── try-on-widget/            # Standalone widget bundle
-│   └── chatbot-widget/          # Standalone chatbot bundle
-└── lib/
-    ├── closelook-plugin/         # Plugin architecture
-    │   ├── adapters/             # Platform adapters (Shopify, Demo)
-    │   └── types/                # TypeScript types
-    └── shopify/                  # Shopify integration utilities
-\`\`\`
+│   ├── api/                    # API routes
+│   │   ├── try-on/            # Try-on generation endpoint
+│   │   ├── chat/              # Chatbot endpoint
+│   │   └── shopify/           # Shopify OAuth and webhooks
+│   ├── admin/                 # Admin dashboard
+│   └── install/               # App installation flow
+├── components/                # React components
+│   ├── closelook-widget.tsx   # Try-on widget component
+│   ├── global-chatbot.tsx     # Chatbot component
+│   └── ui/                    # Shadcn UI components
+├── extensions/                 # Shopify theme app extensions
+│   ├── chatbot-widget/        # Chatbot extension
+│   └── closelook-widgets-extension/  # Try-on widget extension
+├── widgets/                    # Standalone widget bundles
+│   ├── chatbot-widget/        # Chatbot widget source
+│   └── try-on-widget/         # Try-on widget source
+├── lib/                       # Core library code
+│   ├── closelook-plugin/      # Plugin architecture
+│   │   ├── adapters/          # Platform adapters (Shopify, Demo)
+│   │   └── types/             # TypeScript types
+│   └── shopify/               # Shopify integration utilities
+└── scripts/                   # Utility scripts
+    ├── init-db.js             # Database initialization
+    └── migrate-db.js          # Database migrations
+```
 
-## UI Components for Shopify
+## Core Components
 
-The following components are used in the Shopify plugin:
+### Shopify Extensions
 
-- **CloselookWidget** (`components/closelook-widget.tsx`): The try-on widget component
-- **GlobalChatbot** (`components/global-chatbot.tsx`): The chat button and chatbot interface with integrated upload functionality
+The app includes two Shopify theme app extensions:
 
-These can be customized in this repository and will be reflected in the Shopify plugin UI.
+1. **Chatbot Widget** (`extensions/chatbot-widget/`)
+   - AI shopping assistant
+   - Context-aware product recommendations
+   - Integrated with Shopify store data
 
-## API Endpoints
+2. **Closelook Widgets** (`extensions/closelook-widgets-extension/`)
+   - Virtual try-on widget
+   - Product image upload
+   - AI-powered image generation
 
-### POST /api/try-on
+### API Endpoints
 
-Generates a photoreal try-on image using AI image generation.
+- `POST /api/try-on` - Generate try-on images
+- `POST /api/chat` - Chatbot API
+- `GET /api/shopify/products` - Fetch Shopify products
+- `POST /api/shopify/auth/oauth` - OAuth callback
+- `POST /api/shopify/webhooks/*` - Webhook handlers
 
-**Request (FormData)**:
-- `userPhoto`: File - User's photo
-- `productImage`: File[] - Product images
-- `productName`: string - Product name
-- `productCategory`: string - Product category
+### Plugin Architecture
 
-### POST /api/chat
-
-AI shopping assistant for product recommendations.
-
-**Request (JSON)**:
-\`\`\`json
-{
-  "message": "Show me shoes",
-  "conversationHistory": [...],
-  "pageContext": "home|product|other",
-  "currentProduct": {...},
-  "allProducts": [...]
-}
-\`\`\`
-
-## Plugin Architecture
-
-Closelook uses a modular plugin architecture that supports multiple e-commerce platforms:
+The plugin uses a modular architecture that supports multiple e-commerce platforms:
 
 - **Demo Adapter**: Static product data for testing
 - **Shopify Adapter**: Real-time product data from Shopify stores
 
 See `lib/closelook-plugin/README.md` for detailed integration guides.
 
-## Demo Website
+## Development
 
-The demo website (`app/page.tsx` and `app/product/[id]/page.tsx`) is kept for:
-- Testing the UI components (chat button, upload icon)
-- Visual reference for Shopify plugin UI
-- Development and debugging
+### Build Widgets
+
+```bash
+pnpm build:widgets
+```
+
+### Database Migrations
+
+```bash
+pnpm db:migrate
+```
+
+### Production Build
+
+```bash
+pnpm build
+```
+
+## Deployment
+
+1. Set up environment variables on your hosting platform
+2. Run database migrations
+3. Deploy the Next.js app
+4. Deploy Shopify extensions using Shopify CLI
+
+For detailed deployment instructions, see `docs/archive/` directory.
 
 ## License
 
 MIT
-
-## Support
-
-For issues or questions, please open an issue on GitHub.

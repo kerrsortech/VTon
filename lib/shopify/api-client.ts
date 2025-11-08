@@ -513,6 +513,166 @@ export async function fetchCustomerByEmail(
 }
 
 /**
+ * Fetch customer by customer ID (GID format)
+ */
+export async function fetchCustomerById(
+  session: ShopifySession,
+  customerId: string
+): Promise<any | null> {
+  // Convert numeric ID to GID format if needed
+  let gid = customerId
+  if (!customerId.startsWith("gid://")) {
+    // If it's a numeric ID, convert to GID format
+    gid = `gid://shopify/Customer/${customerId}`
+  }
+
+  const query = `
+    query getCustomerById($id: ID!) {
+      customer(id: $id) {
+        id
+        email
+        firstName
+        lastName
+        phone
+        createdAt
+        numberOfOrders
+        totalSpent {
+          amount
+          currencyCode
+        }
+        addresses {
+          address1
+          address2
+          city
+          province
+          country
+          zip
+        }
+        tags
+      }
+    }
+  `
+
+  const variables = {
+    id: gid,
+  }
+
+  const response = await shopifyRequest(session, "/graphql.json", {
+    method: "POST",
+    body: JSON.stringify({ query, variables }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Shopify API error: ${response.statusText}`)
+  }
+
+  const data = await response.json()
+  return data.data?.customer || null
+}
+
+/**
+ * Fetch customer orders by customer ID
+ */
+export async function fetchCustomerOrdersById(
+  session: ShopifySession,
+  customerId: string,
+  limit = 10
+): Promise<any[]> {
+  // Convert numeric ID to GID format if needed
+  let gid = customerId
+  if (!customerId.startsWith("gid://")) {
+    gid = `gid://shopify/Customer/${customerId}`
+  }
+
+  const query = `
+    query getCustomerOrders($id: ID!, $first: Int!) {
+      customer(id: $id) {
+        id
+        email
+        orders(first: $first, sortKey: CREATED_AT, reverse: true) {
+          edges {
+            node {
+              id
+              name
+              createdAt
+              updatedAt
+              displayFulfillmentStatus
+              displayFinancialStatus
+              totalPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              lineItems(first: 10) {
+                edges {
+                  node {
+                    title
+                    quantity
+                    variant {
+                      id
+                      title
+                      price
+                      selectedOptions {
+                        name
+                        value
+                      }
+                    }
+                    product {
+                      id
+                      title
+                    }
+                  }
+                }
+              }
+              shippingAddress {
+                address1
+                address2
+                city
+                province
+                country
+                zip
+              }
+              fulfillments {
+                trackingInfo {
+                  company
+                  number
+                  url
+                }
+                estimatedDeliveryAt
+                status
+              }
+            }
+          }
+        }
+      }
+    }
+  `
+
+  const variables = {
+    id: gid,
+    first: limit,
+  }
+
+  const response = await shopifyRequest(session, "/graphql.json", {
+    method: "POST",
+    body: JSON.stringify({ query, variables }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Shopify API error: ${response.statusText}`)
+  }
+
+  const data = await response.json()
+  const customer = data.data?.customer
+  if (!customer) {
+    return []
+  }
+
+  return customer.orders.edges.map((edge: any) => edge.node)
+}
+
+/**
  * Fetch store policies (shipping, refund, privacy, terms)
  */
 export async function fetchStorePolicies(

@@ -99,6 +99,41 @@ export function detectShopifyCustomer(): DetectedCustomer {
 }
 
 /**
+ * Get Shopify customer ID from multiple sources
+ * This is a more robust method that checks multiple locations where Shopify stores customer ID
+ */
+export function getShopifyCustomerId(): string | null {
+  if (typeof window === "undefined") return null
+  
+  try {
+    // Method 1: window.Shopify.customer (most reliable)
+    if ((window as any).Shopify?.customer?.id) {
+      return (window as any).Shopify.customer.id.toString()
+    }
+    
+    // Method 2: Check __st object (Shopify analytics)
+    if (typeof (window as any).__st !== "undefined" && (window as any).__st?.cid) {
+      return (window as any).__st.cid.toString()
+    }
+    
+    // Method 3: Check meta tag
+    if (typeof document !== "undefined") {
+      const customerMeta = document.querySelector('meta[name="customer-id"], meta[name="shopify-customer-id"]')
+      if (customerMeta) {
+        const customerId = customerMeta.getAttribute("content")
+        if (customerId && customerId !== "0") {
+          return customerId
+        }
+      }
+    }
+    
+    return null
+  } catch (error) {
+    return null
+  }
+}
+
+/**
  * Get cookie value by name
  */
 function getCookie(name: string): string | null {

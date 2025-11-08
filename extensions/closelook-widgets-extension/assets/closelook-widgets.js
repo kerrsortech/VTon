@@ -175,8 +175,70 @@
     console.log('🚀 Chatbot initialized');
   }
 
+  // Helper function to check if user is logged in to Shopify
+  function isUserLoggedIn() {
+    if (typeof window === 'undefined') return false;
+    
+    // Check multiple methods to detect logged-in customer
+    // Method 1: window.Shopify.customer (most reliable)
+    if (window.Shopify?.customer?.id) {
+      return true;
+    }
+    
+    // Method 2: Check __st object (Shopify analytics)
+    if (typeof __st !== 'undefined' && __st.cid) {
+      return true;
+    }
+    
+    // Method 3: Check meta tag
+    const customerMeta = document.querySelector('meta[name="customer-id"], meta[name="shopify-customer-id"]');
+    if (customerMeta && customerMeta.getAttribute('content') && customerMeta.getAttribute('content') !== '0') {
+      return true;
+    }
+    
+    // Method 4: Check for customer access token cookie
+    const customerToken = getCookie('customer_access_token') || getCookie('customer_auth_token');
+    if (customerToken) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  // Helper function to get Shopify customer ID
+  function getShopifyCustomerId() {
+    if (typeof window === 'undefined') return null;
+    
+    // Method 1: window.Shopify.customer (most reliable)
+    if (window.Shopify?.customer?.id) {
+      return window.Shopify.customer.id.toString();
+    }
+    
+    // Method 2: Check __st object (Shopify analytics)
+    if (typeof __st !== 'undefined' && __st.cid) {
+      return __st.cid.toString();
+    }
+    
+    // Method 3: Check meta tag
+    const customerMeta = document.querySelector('meta[name="customer-id"], meta[name="shopify-customer-id"]');
+    if (customerMeta) {
+      const customerId = customerMeta.getAttribute('content');
+      if (customerId && customerId !== '0') {
+        return customerId;
+      }
+    }
+    
+    return null;
+  }
+
   // Fetch and store user images from server
   async function fetchAndStoreUserImages() {
+    // Only fetch if user is logged in
+    if (!isUserLoggedIn()) {
+      console.log('ℹ️ User not logged in, skipping image fetch');
+      return;
+    }
+    
     try {
       const userImages = await fetchUserImages();
       if (userImages.fullBodyUrl) {
@@ -738,6 +800,16 @@
   // ===== TRY-ON FUNCTIONALITY =====
 
   async function handleTryOnClick() {
+    // Check if user is logged in first
+    if (!isUserLoggedIn()) {
+      state.messages.push({
+        role: 'assistant',
+        content: 'Please sign in to your Shopify account to use the virtual try-on feature. You can sign in using the account button in the top right corner of the store.'
+      });
+      renderMessages();
+      return;
+    }
+
     if (!state.currentProduct) {
       state.messages.push({
         role: 'assistant',
@@ -752,44 +824,93 @@
       return;
     }
 
-    // Check if user has saved images
+    // First check if images are already in state (from previous upload or fetch)
+    const hasImagesInState = state.fullBodyUrl || state.halfBodyUrl;
+    
+    if (hasImagesInState) {
+      console.log('✅ Images found in state, using them for try-on', {
+        hasFullBody: !!state.fullBodyUrl,
+        hasHalfBody: !!state.halfBodyUrl
+      });
+      await performVirtualTryOn({
+        fullBodyUrl: state.fullBodyUrl,
+        halfBodyUrl: state.halfBodyUrl
+      });
+      return;
+    }
+
+    // If no images in state, try to fetch from server
+    console.log('🔍 No images in state, fetching from server...');
     try {
-      console.log('🔍 Checking for saved user images...');
       const userImages = await fetchUserImages();
-      console.log('📸 User images check result:', {
+      console.log('📸 User images fetched from server:', {
         hasFullBody: !!userImages.fullBodyUrl,
         hasHalfBody: !!userImages.halfBodyUrl,
         fullBodyUrl: userImages.fullBodyUrl,
         halfBodyUrl: userImages.halfBodyUrl
       });
 
-      if (!userImages.fullBodyUrl && !userImages.halfBodyUrl) {
-        console.log('📤 No images found, opening upload dialog');
+      // Update state with fetched images
+      if (userImages.fullBodyUrl) {
+        state.fullBodyUrl = userImages.fullBodyUrl;
+        state.fullBodyPreview = userImages.fullBodyUrl;
+      }
+      if (userImages.halfBodyUrl) {
+        state.halfBodyUrl = userImages.halfBodyUrl;
+        state.halfBodyPreview = userImages.halfBodyUrl;
+      }
+
+      if (userImages.fullBodyUrl || userImages.halfBodyUrl) {
+        console.log('✅ Images found on server, generating try-on...');
+        await performVirtualTryOn(userImages);
+      } else {
+        console.log('📤 No images found on server, opening upload dialog');
+        state.messages.push({
+          role: 'assistant',
+          content: 'Please upload a photo first to use the virtual try-on feature. Click the upload button to get started.'
+        });
+        renderMessages();
         state.isUploadDialogOpen = true;
         renderUploadDialog();
-      } else {
-        console.log('✅ Images found, generating try-on...');
-        await performVirtualTryOn(userImages);
       }
     } catch (error) {
-      console.error('❌ Error checking user images:', error);
-      // If error fetching, still try to open upload dialog as fallback
-      state.isUploadDialogOpen = true;
-      renderUploadDialog();
+      console.error('❌ Error fetching user images:', error);
+      
+      // Check if it's a network error
+      const isNetworkError = error instanceof TypeError && 
+        (error.message.includes('fetch') || error.message.includes('Failed to fetch'));
+      
+      if (isNetworkError) {
+        state.messages.push({
+          role: 'assistant',
+          content: 'Unable to connect to the server. Please check your internet connection and try again. If you have already uploaded photos, they should still work - try clicking the try-on button again.'
+        });
+        renderMessages();
+      } else {
+        // For other errors, show message and open upload dialog
+        state.messages.push({
+          role: 'assistant',
+          content: 'Please upload a photo first to use the virtual try-on feature. Click the upload button to get started.'
+        });
+        renderMessages();
+        state.isUploadDialogOpen = true;
+        renderUploadDialog();
+      }
     }
   }
 
   async function fetchUserImages(userId = null) {
     const backendUrl = config.backendUrl.replace(/\/$/, '') + '/api/user-images';
     try {
-      // Get Shopify customer ID from window if available (for Shopify stores)
-      const shopifyCustomerId = typeof window !== 'undefined' 
-        ? (window.Shopify?.customer?.id) 
-        : null;
+      // Get Shopify customer ID - required for authenticated users
+      const shopifyCustomerId = getShopifyCustomerId();
 
       const headers = {};
       if (shopifyCustomerId) {
-        headers['x-shopify-customer-id'] = shopifyCustomerId.toString();
+        headers['x-shopify-customer-id'] = shopifyCustomerId;
+      } else {
+        // If no Shopify customer ID, user must be logged in
+        console.warn('⚠️ No Shopify customer ID found - user may not be logged in');
       }
       // If userId is provided (e.g., from upload response), send it as header
       // This ensures we can fetch images immediately after upload even if cookie isn't set yet
@@ -850,12 +971,19 @@
 
       const formData = new FormData();
       
+      // Validate that we have at least one user image
+      if (!userImages.fullBodyUrl && !userImages.halfBodyUrl) {
+        throw new Error('No user images available. Please upload a photo first.');
+      }
+      
       // Use saved images if available, otherwise use uploaded files
       if (userImages.fullBodyUrl) {
         formData.append('fullBodyUrl', userImages.fullBodyUrl);
+        console.log('✅ Using full body image URL:', userImages.fullBodyUrl);
       }
       if (userImages.halfBodyUrl) {
         formData.append('halfBodyUrl', userImages.halfBodyUrl);
+        console.log('✅ Using half body image URL:', userImages.halfBodyUrl);
       }
 
       // Add product info (exact match of original backend expectations)
@@ -945,17 +1073,24 @@
         console.log('✅ Product URL sent for page analysis:', productUrl);
       }
 
-      // Get Shopify context and customer info
+      // Get Shopify context and customer info - required for authenticated users
+      const shopifyCustomerId = getShopifyCustomerId();
+      
+      if (!shopifyCustomerId) {
+        throw new Error('You must be signed in to use the virtual try-on feature. Please sign in to your Shopify account first.');
+      }
+      
       if (shopDomain) {
         formData.append('shopDomain', shopDomain);
+        formData.append('shopifyCustomerId', shopifyCustomerId);
         
-        // Try to get customer info if available
-        if (window.Shopify?.customer?.id) {
-          formData.append('shopifyCustomerId', window.Shopify.customer.id.toString());
-        }
+        // Try to get customer email if available
         if (window.Shopify?.customer?.email) {
           formData.append('customerEmail', window.Shopify.customer.email);
         }
+      } else {
+        // Even without shopDomain, we need to send customer ID
+        formData.append('shopifyCustomerId', shopifyCustomerId);
       }
 
       // Backend will:
@@ -989,8 +1124,25 @@
 
       renderMessages();
     } catch (error) {
-      console.error('Try-on error:', error);
-      state.uploadError = error.message || 'Failed to generate try-on';
+      console.error('❌ Try-on error:', error);
+      
+      // Determine error message
+      let errorMessage = 'Failed to generate try-on image';
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        errorMessage = 'Unable to connect to the server. Please check your internet connection and try again.';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      // Show error in chat
+      state.messages.push({
+        role: 'assistant',
+        content: `Sorry, I encountered an error while generating your try-on: ${errorMessage}. Please try again.`
+      });
+      renderMessages();
+      
+      // Also show error notification
+      state.uploadError = errorMessage;
       showUploadError();
     } finally {
       state.isGenerating = false;
@@ -999,6 +1151,16 @@
   }
 
   async function handleUploadClick() {
+    // Check if user is logged in first
+    if (!isUserLoggedIn()) {
+      state.messages.push({
+        role: 'assistant',
+        content: 'Please sign in to your Shopify account to upload photos and use the virtual try-on feature. You can sign in using the account button in the top right corner of the store.'
+      });
+      renderMessages();
+      return;
+    }
+
     // Fetch user images before opening dialog to show saved images
     try {
       await fetchAndStoreUserImages();
@@ -1277,15 +1439,15 @@
 
       const backendUrl = config.backendUrl.replace(/\/$/, '') + '/api/upload-user-images';
       
-      // Get Shopify customer ID from window if available (for Shopify stores)
-      const shopifyCustomerId = typeof window !== 'undefined' 
-        ? (window.Shopify?.customer?.id) 
-        : null;
+      // Get Shopify customer ID - required for authenticated users
+      const shopifyCustomerId = getShopifyCustomerId();
+      
+      if (!shopifyCustomerId) {
+        throw new Error('You must be signed in to upload photos. Please sign in to your Shopify account first.');
+      }
 
       const headers = {};
-      if (shopifyCustomerId) {
-        headers['x-shopify-customer-id'] = shopifyCustomerId.toString();
-      }
+      headers['x-shopify-customer-id'] = shopifyCustomerId;
       
       console.log('📤 Uploading images to:', backendUrl);
       console.log('📤 FormData:', {
@@ -1330,53 +1492,63 @@
       state.fullBodyPreview = null;
       state.halfBodyPreview = null;
 
-      // Fetch and store the uploaded images from server
-      // This ensures we have the correct URLs that are saved to the database
-      // Pass userId from upload response to ensure we can fetch immediately
+      // First, update state from upload response (immediate update)
+      // This ensures state is updated even if fetch fails
+      if (result.images && result.images.length > 0) {
+        result.images.forEach(img => {
+          if (img.type === 'fullBody') {
+            state.fullBodyUrl = img.url;
+            state.fullBodyPreview = img.url;
+            console.log('✅ Stored full body image URL from upload response:', img.url);
+          } else if (img.type === 'halfBody') {
+            state.halfBodyUrl = img.url;
+            state.halfBodyPreview = img.url;
+            console.log('✅ Stored half body image URL from upload response:', img.url);
+          }
+        });
+      }
+
+      // Then try to fetch from server to ensure we have the latest data
+      // This is a best-effort update, but state is already set from upload response
       try {
         const userImages = await fetchUserImages(uploadedUserId);
         if (userImages.fullBodyUrl) {
           state.fullBodyUrl = userImages.fullBodyUrl;
-          state.fullBodyPreview = userImages.fullBodyUrl; // Display saved image
-          console.log('✅ Stored full body image URL:', userImages.fullBodyUrl);
+          state.fullBodyPreview = userImages.fullBodyUrl;
+          console.log('✅ Updated full body image URL from server:', userImages.fullBodyUrl);
         }
         if (userImages.halfBodyUrl) {
           state.halfBodyUrl = userImages.halfBodyUrl;
-          state.halfBodyPreview = userImages.halfBodyUrl; // Display saved image
-          console.log('✅ Stored half body image URL:', userImages.halfBodyUrl);
-        }
-        
-        // Update the upload dialog to show the uploaded images in the placeholder
-        if (state.isUploadDialogOpen) {
-          renderUploadDialog();
+          state.halfBodyPreview = userImages.halfBodyUrl;
+          console.log('✅ Updated half body image URL from server:', userImages.halfBodyUrl);
         }
       } catch (error) {
-        console.warn('Failed to fetch uploaded images after save:', error);
-        // Even if fetch fails, try to update dialog in case we have URLs from upload response
-        if (result.images && result.images.length > 0) {
-          // Use images from upload response as fallback
-          result.images.forEach(img => {
-            if (img.type === 'fullBody') {
-              state.fullBodyUrl = img.url;
-              state.fullBodyPreview = img.url;
-            } else if (img.type === 'halfBody') {
-              state.halfBodyUrl = img.url;
-              state.halfBodyPreview = img.url;
-            }
-          });
-          if (state.isUploadDialogOpen) {
-            renderUploadDialog();
-          }
-        }
+        console.warn('⚠️ Failed to fetch uploaded images after save (using upload response URLs):', error);
+        // State is already updated from upload response, so this is fine
       }
+      
+      // Update the upload dialog to show the uploaded images
+      if (state.isUploadDialogOpen) {
+        renderUploadDialog();
+      }
+      
+      console.log('✅ State updated with images:', {
+        hasFullBody: !!state.fullBodyUrl,
+        hasHalfBody: !!state.halfBodyUrl,
+        fullBodyUrl: state.fullBodyUrl,
+        halfBodyUrl: state.halfBodyUrl
+      });
 
       closeUploadDialog();
 
+      // Show success message with confirmation that images are saved
       state.messages.push({
         role: 'assistant',
-        content: 'Great! Your photos have been saved. You can now try on any product by clicking the try-on button.'
+        content: 'Great! Your photos have been saved successfully. You can now try on any product by clicking the "Try on this product" button. Your photos are securely stored and ready to use.'
       });
       renderMessages();
+      
+      console.log('✅ Upload complete - images are now available for try-on');
     } catch (error) {
       console.error('❌ Upload failed:', error);
       

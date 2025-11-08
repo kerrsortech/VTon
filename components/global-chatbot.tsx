@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils"
 import type { Product, TryOnResult } from "@/lib/closelook-types"
 import { useCloselook } from "@/components/closelook-provider"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { getShopifyCustomerId } from "@/lib/shopify/customer-detector"
 
 // Client-side logger (simple console logger for browser)
 const logger = {
@@ -44,6 +45,181 @@ interface GlobalChatbotProps {
   className?: string
 }
 
+// SessionStorage keys for context persistence
+const STORAGE_KEY_LAST_PRODUCT = 'closelook_last_valid_product'
+const STORAGE_KEY_LAST_PAGE_CONTEXT = 'closelook_last_page_context'
+
+// Helper functions for context persistence
+function persistProductContext(product: Product | null) {
+  if (typeof window === "undefined") return
+  
+  if (product && product.id) {
+    try {
+      sessionStorage.setItem(STORAGE_KEY_LAST_PRODUCT, JSON.stringify({
+        id: product.id,
+        name: product.name,
+        url: product.url,
+        handle: product.handle,
+      }))
+      logger.debug("[Context] Product persisted to sessionStorage", { id: product.id, name: product.name })
+    } catch (e) {
+      logger.warn("[Context] Failed to persist product to sessionStorage", { error: e })
+    }
+  } else {
+    // Only clear if explicitly leaving product page (not on initial load)
+    // Don't clear on initial load - preserve last valid product
+  }
+}
+
+function loadStoredProductContext(): Product | null {
+  if (typeof window === "undefined") return null
+  
+  try {
+    const stored = sessionStorage.getItem(STORAGE_KEY_LAST_PRODUCT)
+    if (stored) {
+      const parsed = JSON.parse(stored)
+      if (parsed && parsed.id) {
+        logger.debug("[Context] Product loaded from sessionStorage", { id: parsed.id, name: parsed.name })
+        return {
+          id: parsed.id,
+          name: parsed.name || "Product",
+          url: parsed.url,
+          handle: parsed.handle,
+          category: "",
+          type: "",
+          color: "",
+          price: 0,
+          images: [],
+          description: "",
+          sizes: [],
+        }
+      }
+    }
+  } catch (e) {
+    logger.warn("[Context] Failed to load product from sessionStorage", { error: e })
+  }
+  
+  return null
+}
+
+function clearStoredProductContext() {
+  if (typeof window === "undefined") return
+  
+  try {
+    sessionStorage.removeItem(STORAGE_KEY_LAST_PRODUCT)
+    sessionStorage.removeItem(STORAGE_KEY_LAST_PAGE_CONTEXT)
+    logger.debug("[Context] Product context cleared from sessionStorage")
+  } catch (e) {
+    logger.warn("[Context] Failed to clear product from sessionStorage", { error: e })
+  }
+}
+
+// Function to recapture product context from page (for Shopify stores)
+function recaptureProductContextFromPage(): Product | null {
+  if (typeof window === "undefined") return null
+  
+  try {
+    // Check if we're on a product page
+    const pathname = window.location.pathname
+    const isProductPage = pathname.includes('/products/')
+    
+    if (!isProductPage) {
+      return null
+    }
+    
+    let productData: any = {}
+    
+    // Method 1: ShopifyAnalytics (Most Reliable)
+    if ((window as any).ShopifyAnalytics?.meta?.product) {
+      const product = (window as any).ShopifyAnalytics.meta.product
+      productData = {
+        id: product.id?.toString(),
+        gid: product.gid,
+        name: product.title || product.name,
+        title: product.title || product.name,
+        type: product.type,
+        vendor: product.vendor,
+      }
+      logger.debug("[Context] Product captured from ShopifyAnalytics", productData)
+    }
+    
+    // Method 2: Meta tags (Fallback)
+    if (!productData.id) {
+      const metaProductId = document.querySelector('meta[property="product:id"]')?.getAttribute("content") ||
+                           document.querySelector('meta[name="product:id"]')?.getAttribute("content")
+      if (metaProductId) {
+        productData.id = metaProductId
+        logger.debug("[Context] Product ID from meta tag", metaProductId)
+      }
+    }
+    
+    // Method 3: Extract handle from URL
+    const handleMatch = pathname.match(/\/products\/([^\/\?]+)/)
+    if (handleMatch) {
+      productData.handle = handleMatch[1]
+      logger.debug("[Context] Product handle from URL", productData.handle)
+    }
+    
+    // Method 4: Try to find product JSON in page
+    const productJsonScript = document.querySelector('script[data-product-json]') ||
+                              document.querySelector('script[type="application/json"][data-product]')
+    if (productJsonScript) {
+      try {
+        const productJson = JSON.parse(productJsonScript.textContent || '{}')
+        productData.id = productData.id || productJson.id?.toString()
+        productData.name = productData.name || productJson.title || productJson.name
+        productData.handle = productData.handle || productJson.handle
+        logger.debug("[Context] Product from JSON script", productData)
+      } catch (e) {
+        logger.warn("[Context] Failed to parse product JSON", { error: e })
+      }
+    }
+    
+    // Method 5: Check window.meta
+    if ((window as any).meta?.product) {
+      const metaProduct = (window as any).meta.product
+      productData.id = productData.id || metaProduct.id?.toString()
+      productData.name = productData.name || metaProduct.title || metaProduct.name
+      logger.debug("[Context] Product from window.meta")
+    }
+    
+    // Method 6: Check Shopify.theme
+    if ((window as any).Shopify?.theme?.product) {
+      const themeProduct = (window as any).Shopify.theme.product
+      productData.id = productData.id || themeProduct.id?.toString()
+      productData.name = productData.name || themeProduct.title || themeProduct.name
+      logger.debug("[Context] Product from Shopify.theme")
+    }
+    
+    if (productData.id || productData.handle) {
+      const recapturedProduct: Product = {
+        id: productData.id || productData.handle || "",
+        name: productData.name || "Product",
+        url: window.location.href,
+        handle: productData.handle,
+        category: productData.category || "",
+        type: productData.type || "",
+        color: "",
+        price: 0,
+        images: [],
+        description: "",
+        sizes: [],
+      }
+      
+      logger.info("[Context] ✅ Product recaptured from page", { 
+        id: recapturedProduct.id, 
+        name: recapturedProduct.name 
+      })
+      
+      return recapturedProduct
+    }
+  } catch (e) {
+    logger.warn("[Context] Error recapturing product context", { error: e })
+  }
+  
+  return null
+}
+
 export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps) {
   const pathname = usePathname()
   const [isOpen, setIsOpen] = useState(false)
@@ -56,6 +232,13 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  
+  // State to track effective product (with fallback to stored context)
+  const [effectiveProduct, setEffectiveProduct] = useState<Product | null>(currentProduct || null)
+  
+  // Track current product ID/URL to detect changes
+  const currentProductIdRef = useRef<string | null>(null)
+  const currentProductUrlRef = useRef<string | null>(null)
   
   // Upload widget state (moved from CloselookWidget)
   const [userPhoto, setUserPhoto] = useState<File | null>(null)
@@ -80,6 +263,278 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
   // Check if user has uploaded images
   const hasUploadedImages = userImages.fullBodyUrl || userImages.halfBodyUrl
 
+  // ============ CRITICAL FIX: Persist product context when currentProduct prop changes ============
+  useEffect(() => {
+    if (currentProduct && currentProduct.id) {
+      // Check if product has changed
+      const productId = currentProduct.id
+      const productUrl = currentProduct.url || window.location.href
+      
+      // If product ID changed, always update (even if stored product exists)
+      if (currentProductIdRef.current !== productId || currentProductUrlRef.current !== productUrl) {
+        const previousId = currentProductIdRef.current
+        currentProductIdRef.current = productId
+        currentProductUrlRef.current = productUrl
+        
+        // Update effective product and persist to storage (replaces old product)
+        setEffectiveProduct(currentProduct)
+        persistProductContext(currentProduct)
+        logger.info("[Context] Product context updated from prop (new product detected)", { 
+          id: currentProduct.id, 
+          name: currentProduct.name,
+          previousId: previousId
+        })
+      }
+    } else if (currentProduct === null) {
+      // Explicitly null means we're not on a product page
+      // Only clear if we're truly leaving product page (not just prop not provided)
+      const isProductPage = typeof window !== "undefined" && 
+        (window.location.pathname.includes('/products/') || 
+         (window as any).ShopifyAnalytics?.meta?.product)
+      
+      if (!isProductPage) {
+        // Not on product page - clear effective product and stored context
+        setEffectiveProduct(null)
+        clearStoredProductContext()
+        currentProductIdRef.current = null
+        currentProductUrlRef.current = null
+        logger.debug("[Context] Product context cleared (not on product page)")
+      }
+    } else {
+      // currentProduct is undefined - try to use stored context or recapture
+      const recaptured = recaptureProductContextFromPage()
+      
+      if (recaptured) {
+        // Check if recaptured product is different from current
+        const recapturedId = recaptured.id
+        const recapturedUrl = recaptured.url || window.location.href
+        
+        // Always update if product ID or URL changed
+        if (currentProductIdRef.current !== recapturedId || currentProductUrlRef.current !== recapturedUrl) {
+          currentProductIdRef.current = recapturedId
+          currentProductUrlRef.current = recapturedUrl
+          
+          setEffectiveProduct(recaptured)
+          persistProductContext(recaptured) // Replace stored product with new one
+          logger.info("[Context] Product context recaptured from page (new product)", { 
+            id: recaptured.id, 
+            name: recaptured.name 
+          })
+        }
+      } else {
+        // Not on product page - check if we should clear
+        const stored = loadStoredProductContext()
+        if (stored && !window.location.pathname.includes('/products/')) {
+          // We're not on a product page, but we have stored product - keep it as fallback
+          setEffectiveProduct(stored)
+          logger.info("[Context] Product context loaded from storage (not on product page)", { 
+            id: stored.id, 
+            name: stored.name 
+          })
+        } else if (!stored) {
+          setEffectiveProduct(null)
+          currentProductIdRef.current = null
+          currentProductUrlRef.current = null
+        }
+      }
+    }
+  }, [currentProduct])
+
+  // ============ CRITICAL FIX: Recapture context on navigation/page changes ============
+  // This ensures product updates automatically when navigating to different product pages
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    
+    // Wait a bit for page to load (especially for SPA navigation)
+    const timeoutId = setTimeout(() => {
+      const recaptured = recaptureProductContextFromPage()
+      const currentUrl = window.location.href
+      const currentPathname = window.location.pathname
+      
+      if (recaptured) {
+        const recapturedId = recaptured.id
+        const recapturedUrl = recaptured.url || currentUrl
+        
+        // CRITICAL: Always update if product ID or URL changed (different product page)
+        if (currentProductIdRef.current !== recapturedId || currentProductUrlRef.current !== recapturedUrl) {
+          // Product changed - update immediately
+          const previousId = currentProductIdRef.current
+          currentProductIdRef.current = recapturedId
+          currentProductUrlRef.current = recapturedUrl
+          
+          setEffectiveProduct(recaptured)
+          persistProductContext(recaptured) // Replace old product with new one
+          logger.info("[Context] Product context updated after navigation (new product detected)", { 
+            id: recaptured.id, 
+            name: recaptured.name,
+            pathname: currentPathname,
+            previousId: previousId,
+            url: currentUrl
+          })
+        } else {
+          // Same product - just ensure it's set
+          setEffectiveProduct(recaptured)
+          logger.debug("[Context] Same product after navigation", { 
+            id: recaptured.id,
+            pathname: currentPathname
+          })
+        }
+      } else {
+        // Check if we're no longer on a product page
+        const isProductPage = currentPathname.includes('/products/')
+        if (!isProductPage) {
+          // Not on product page - clear refs but keep stored context as fallback
+          if (effectiveProduct) {
+            currentProductIdRef.current = null
+            currentProductUrlRef.current = null
+            logger.debug("[Context] Left product page, cleared active product", { pathname: currentPathname })
+          }
+        }
+      }
+    }, 300) // 300ms delay to let page load
+    
+    return () => clearTimeout(timeoutId)
+  }, [pathname, effectiveProduct])
+
+  // ============ CRITICAL FIX: Recapture context when chat window opens ============
+  useEffect(() => {
+    if (!isOpen) return
+    
+    // Recapture context when chat opens (user might have navigated to different product)
+    const timeoutId = setTimeout(() => {
+      const recaptured = recaptureProductContextFromPage()
+      const currentUrl = window.location.href
+      
+      if (recaptured) {
+        const recapturedId = recaptured.id
+        const recapturedUrl = recaptured.url || currentUrl
+        
+        // CRITICAL: Always update if product changed (different product page)
+        if (currentProductIdRef.current !== recapturedId || currentProductUrlRef.current !== recapturedUrl) {
+          const previousId = currentProductIdRef.current
+          currentProductIdRef.current = recapturedId
+          currentProductUrlRef.current = recapturedUrl
+          
+          setEffectiveProduct(recaptured)
+          persistProductContext(recaptured) // Replace old product with new one
+          logger.info("[Context] Product context updated on chat open (new product detected)", { 
+            id: recaptured.id, 
+            name: recaptured.name,
+            previousId: previousId
+          })
+        } else {
+          // Same product - just ensure it's set
+          setEffectiveProduct(recaptured)
+          logger.debug("[Context] Same product on chat open", { id: recaptured.id })
+        }
+      } else {
+        // Fallback to stored context only if we're not on a product page
+        const stored = loadStoredProductContext()
+        if (stored && !window.location.pathname.includes('/products/')) {
+          if (!effectiveProduct) {
+            setEffectiveProduct(stored)
+            logger.info("[Context] Product context restored from storage on chat open", { 
+              id: stored.id, 
+              name: stored.name 
+            })
+          }
+        }
+      }
+    }, 200) // 200ms delay after chat opens
+    
+    return () => clearTimeout(timeoutId)
+  }, [isOpen, effectiveProduct])
+
+  // ============ CRITICAL FIX: Listen for navigation events (SPA, Turbo, etc.) ============
+  // This ensures product updates automatically on any navigation (SPA, page refresh, etc.)
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    
+    const handleNavigation = () => {
+      // Delay to let new page load
+      setTimeout(() => {
+        const recaptured = recaptureProductContextFromPage()
+        const currentUrl = window.location.href
+        
+        if (recaptured) {
+          const recapturedId = recaptured.id
+          const recapturedUrl = recaptured.url || currentUrl
+          
+          // CRITICAL: Always update if product ID or URL changed (different product page)
+          if (currentProductIdRef.current !== recapturedId || currentProductUrlRef.current !== recapturedUrl) {
+            // Product changed - update immediately
+            const previousId = currentProductIdRef.current
+            currentProductIdRef.current = recapturedId
+            currentProductUrlRef.current = recapturedUrl
+            
+            setEffectiveProduct(recaptured)
+            persistProductContext(recaptured) // Replace old product with new one
+            logger.info("[Context] Product context updated on navigation event (new product detected)", { 
+              id: recaptured.id, 
+              name: recaptured.name,
+              url: currentUrl,
+              previousId: previousId
+            })
+          } else {
+            // Same product - just ensure it's set
+            setEffectiveProduct(recaptured)
+            logger.debug("[Context] Same product on navigation event", { id: recaptured.id })
+          }
+        } else {
+          // Not on product page - clear refs if we were on a product page before
+          if (currentProductIdRef.current) {
+            currentProductIdRef.current = null
+            currentProductUrlRef.current = null
+            logger.debug("[Context] Left product page on navigation event")
+          }
+        }
+      }, 300)
+    }
+    
+    // Listen to popstate (back/forward)
+    window.addEventListener('popstate', handleNavigation)
+    
+    // Listen to pushState/replaceState (SPA navigation)
+    const originalPushState = history.pushState
+    const originalReplaceState = history.replaceState
+    
+    history.pushState = function(...args) {
+      originalPushState.apply(history, args)
+      handleNavigation()
+    }
+    
+    history.replaceState = function(...args) {
+      originalReplaceState.apply(history, args)
+      handleNavigation()
+    }
+    
+    // Poll for URL changes (fallback for all navigation types)
+    // This catches any navigation that doesn't trigger the above events
+    const urlCheckInterval = typeof window !== "undefined" && window.setInterval
+      ? window.setInterval(() => {
+          const currentUrl = window.location.href
+          const lastUrl = (window as any).__lastChatbotUrl
+          
+          if (currentUrl !== lastUrl) {
+            (window as any).__lastChatbotUrl = currentUrl
+            handleNavigation()
+          }
+        }, 500) // Poll every 500ms
+      : null
+    
+    // Initialize last URL
+    (window as any).__lastChatbotUrl = window.location.href
+    
+    return () => {
+      window.removeEventListener('popstate', handleNavigation)
+      history.pushState = originalPushState
+      history.replaceState = originalReplaceState
+      if (urlCheckInterval && typeof window !== "undefined" && window.clearInterval) {
+        window.clearInterval(urlCheckInterval)
+      }
+    }
+  }, [])
+
   // Fetch existing user images on mount
   useEffect(() => {
     // Skip if images are already loaded
@@ -89,9 +544,9 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
 
     const fetchUserImages = async () => {
       try {
-        // Get Shopify customer ID from window if available (for Shopify stores)
+        // Get Shopify customer ID using robust detection method
         const shopifyCustomerId = typeof window !== "undefined" 
-          ? (window as any).Shopify?.customer?.id 
+          ? getShopifyCustomerId()
           : null
 
         const headers: HeadersInit = {}
@@ -165,6 +620,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
   }, [isOpen])
 
 
+  // Use effectiveProduct instead of currentProduct for prompts
   const promptTemplates =
     pathname === "/"
       ? [
@@ -172,7 +628,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
           "Help me find something",
           "What are your best-selling items?",
         ]
-      : currentProduct
+      : effectiveProduct
         ? [
             "Tell me more about this product",
             "Recommend matching items",
@@ -265,7 +721,90 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
     setIsLoading(true)
 
     try {
-      const pageContext = pathname === "/" ? "home" : currentProduct ? "product" : "other"
+      // ============ CRITICAL FIX: Always recapture product before sending (ensures latest product) ============
+      // Always recapture to ensure we have the current product (might have navigated to different product)
+      let productToSend: Product | null = null
+      const recaptured = recaptureProductContextFromPage()
+      const currentUrl = window.location.href
+      const currentPathname = window.location.pathname
+      
+      // Also check if currentProduct prop has changed (from wrapper)
+      if (currentProduct && currentProduct.id) {
+        const propProductId = currentProduct.id
+        const propProductUrl = currentProduct.url || currentUrl
+        
+        // CRITICAL: Always update if product changed (different product page)
+        if (currentProductIdRef.current !== propProductId || currentProductUrlRef.current !== propProductUrl) {
+          // Product changed - update immediately
+          const previousId = currentProductIdRef.current
+          currentProductIdRef.current = propProductId
+          currentProductUrlRef.current = propProductUrl
+          
+          productToSend = {
+            id: propProductId,
+            name: currentProduct.name || "Product",
+            url: propProductUrl,
+            handle: currentProduct.handle,
+            category: currentProduct.category || "",
+            type: currentProduct.type || "",
+            color: currentProduct.color || "",
+            price: currentProduct.price || 0,
+            images: currentProduct.images || [],
+            description: currentProduct.description || "",
+            sizes: currentProduct.sizes || [],
+          }
+          setEffectiveProduct(productToSend)
+          persistProductContext(productToSend) // Replace old product with new one
+          logger.info("[Context] Product updated from prop before sending message (new product detected)", { 
+            id: productToSend.id, 
+            name: productToSend.name,
+            previousId: previousId,
+            url: propProductUrl
+          })
+        }
+      }
+      
+      // If we don't have a product from prop, try recaptured
+      if (!productToSend && recaptured) {
+        const recapturedId = recaptured.id
+        const recapturedUrl = recaptured.url || currentUrl
+        
+        // CRITICAL: Always update if product changed (different product page)
+        if (currentProductIdRef.current !== recapturedId || currentProductUrlRef.current !== recapturedUrl) {
+          // Product changed - update immediately
+          const previousId = currentProductIdRef.current
+          currentProductIdRef.current = recapturedId
+          currentProductUrlRef.current = recapturedUrl
+          
+          productToSend = recaptured
+          setEffectiveProduct(recaptured)
+          persistProductContext(recaptured) // Replace old product with new one
+          logger.info("[Context] Product updated from page recapture before sending message (new product detected)", { 
+            id: recaptured.id, 
+            name: recaptured.name,
+            previousId: previousId,
+            url: recapturedUrl
+          })
+        } else {
+          // Same product - use recaptured to ensure we have latest data
+          productToSend = recaptured
+          setEffectiveProduct(recaptured)
+          logger.debug("[Context] Same product before sending message", { id: recaptured.id })
+        }
+      }
+      
+      // Fallback to effectiveProduct or stored context
+      if (!productToSend) {
+        productToSend = effectiveProduct || loadStoredProductContext()
+        if (productToSend && !currentPathname.includes('/products/') && !currentPathname.includes('/product/')) {
+          logger.info("[Context] Using stored product context (not on product page)", { 
+            id: productToSend.id, 
+            name: productToSend.name 
+          })
+        }
+      }
+
+      const pageContext = pathname === "/" ? "home" : productToSend ? "product" : "other"
 
       // Try to get shop domain and customer name from Shopify storefront context
       let shopDomain: string | undefined = undefined
@@ -306,26 +845,36 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
         }
 
         // Detect customer from Shopify storefront context (only name for personalization)
+        // CRITICAL: Always try to detect customer name - it's essential for personalization
         try {
           const customerDetector = await import("@/lib/shopify/customer-detector")
           const detected = customerDetector.detectShopifyCustomer()
           if (detected.isLoggedIn) {
-            customerName = detected.name
+            // Always use detected name if available
+            customerName = detected.name || customerName
             // Store internal fields for backend use (not sent to chat API)
             customerInternal = detected._internal
+            logger.info("[Context] Customer detected", { 
+              name: customerName, 
+              isLoggedIn: detected.isLoggedIn,
+              hasInternal: !!customerInternal
+            })
+          } else {
+            logger.debug("[Context] Customer not logged in or not detected")
           }
         } catch (e) {
           // Customer detection not available or error
           // This is fine - customer may not be logged in
+          logger.debug("[Context] Customer detection failed", { error: e })
         }
       }
 
       // Get product URL for product page analysis
       let productUrl: string | undefined = undefined
-      if (currentProduct && typeof window !== "undefined") {
+      if (productToSend && typeof window !== "undefined") {
         // Prefer product.url if available
-        if (currentProduct.url && currentProduct.url.startsWith("http")) {
-          productUrl = currentProduct.url
+        if (productToSend.url && productToSend.url.startsWith("http")) {
+          productUrl = productToSend.url
         } 
         // Use current page URL if on product page
         else if (pageContext === "product") {
@@ -333,33 +882,47 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
         }
       }
 
+      // ============ CRITICAL FIX: Build payload with smart product context ============
+      const payload = {
+        message: userMessage,
+        conversationHistory: messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+        pageContext,
+        shop: shopDomain, // Shopify shop domain
+        customerName: customerName, // Customer name for personalization only
+        customerInternal: customerInternal, // Internal customer info for API calls (not used by chatbot)
+        // Always send product context if available (with fallback to stored)
+        currentProduct: productToSend
+          ? {
+              id: productToSend.id,
+              // Only send basic identifying info, backend will fetch full details
+              name: productToSend.name,
+              url: productUrl, // Include product URL for page analysis
+              handle: productToSend.handle, // Include handle for backend lookup
+            }
+          : undefined,
+        // No longer sending allProducts - backend will fetch from Shopify
+        // This keeps widget lightweight (UI + basic tracking only)
+        allProducts: undefined,
+      }
+
+      // ============ CRITICAL FIX: Log payload for debugging ============
+      logger.info("[Context] Payload to backend:", {
+        currentProduct: payload.currentProduct,
+        pageContext: payload.pageContext,
+        shop: payload.shop,
+        hasProduct: !!payload.currentProduct,
+        productId: payload.currentProduct?.id,
+        productName: payload.currentProduct?.name,
+        message: userMessage.substring(0, 50) + (userMessage.length > 50 ? "..." : ""),
+      })
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: userMessage,
-          conversationHistory: messages.map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          pageContext,
-          shop: shopDomain, // Shopify shop domain
-          customerName: customerName, // Customer name for personalization only
-          customerInternal: customerInternal, // Internal customer info for API calls (not used by chatbot)
-          // Widget sends minimal data - only product ID/handle and shop domain
-          // Backend fetches full product data from Shopify
-          currentProduct: currentProduct
-            ? {
-                id: currentProduct.id,
-                // Only send basic identifying info, backend will fetch full details
-                name: currentProduct.name,
-                url: productUrl, // Include product URL for page analysis
-              }
-            : undefined,
-          // No longer sending allProducts - backend will fetch from Shopify
-          // This keeps widget lightweight (UI + basic tracking only)
-          allProducts: undefined,
-        }),
+        body: JSON.stringify(payload),
       })
 
       if (!response.ok) {
@@ -417,10 +980,10 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
 
   // Upload widget handlers (moved from CloselookWidget)
   const handleTryOnWithUrls = async (images: { fullBodyUrl?: string; halfBodyUrl?: string }) => {
-    if (!currentProduct) return
+    if (!effectiveProduct) return
 
     setIsGenerating(true)
-    setGeneratingProductId(currentProduct.id)
+    setGeneratingProductId(effectiveProduct.id)
     setUploadError(null)
 
     try {
@@ -441,10 +1004,10 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
         : null
       
       let productImageCount = 0
-      if (!shopDomain && currentProduct.images && currentProduct.images.length > 0) {
+      if (!shopDomain && effectiveProduct.images && effectiveProduct.images.length > 0) {
         // Not in Shopify context, fetch images client-side as fallback
         const maxProductImages = 3
-        const productImagesToSend = currentProduct.images.slice(0, maxProductImages)
+        const productImagesToSend = effectiveProduct.images.slice(0, maxProductImages)
 
         for (let i = 0; i < productImagesToSend.length; i++) {
           const productImageResponse = await fetch(productImagesToSend[i])
@@ -459,19 +1022,19 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       }
 
       formData.append("productImageCount", String(productImageCount))
-      formData.append("productName", currentProduct.name)
-      formData.append("productCategory", currentProduct.category)
-      formData.append("productType", currentProduct.type)
-      formData.append("productColor", currentProduct.color)
+      formData.append("productName", effectiveProduct.name)
+      formData.append("productCategory", effectiveProduct.category)
+      formData.append("productType", effectiveProduct.type)
+      formData.append("productColor", effectiveProduct.color)
 
       // Send product page URL if available (for enhanced product analysis)
-      if (currentProduct.url || (typeof window !== "undefined" && window.location.href)) {
-        const productUrl = currentProduct.url || window.location.href
+      if (effectiveProduct.url || (typeof window !== "undefined" && window.location.href)) {
+        const productUrl = effectiveProduct.url || window.location.href
         formData.append("productUrl", productUrl)
       }
 
       // Include analytics tracking data
-      formData.append("productId", currentProduct.id)
+      formData.append("productId", effectiveProduct.id)
       
       // Get shop domain and customer info from window (for Shopify stores)
       const headers: HeadersInit = {}
@@ -481,7 +1044,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
         }
 
         // Get customer info for tracking
-        const shopifyCustomerId = (window as any).Shopify?.customer?.id
+        const shopifyCustomerId = getShopifyCustomerId()
         if (shopifyCustomerId) {
           formData.append("shopifyCustomerId", shopifyCustomerId.toString())
           headers["x-shopify-customer-id"] = shopifyCustomerId.toString()
@@ -494,8 +1057,8 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       }
 
       logger.info("Sending try-on request", {
-        productId: currentProduct.id,
-        productName: currentProduct.name,
+        productId: effectiveProduct.id,
+        productName: effectiveProduct.name,
         hasFullBody: !!images.fullBodyUrl,
         hasHalfBody: !!images.halfBodyUrl,
       })
@@ -523,7 +1086,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       setGeneratingProductId(null)
       
       logger.info("Try-on generation successful", {
-        productId: currentProduct.id,
+        productId: effectiveProduct.id,
         imageUrl: result.imageUrl,
       })
       
@@ -532,7 +1095,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
         ...prev,
         {
           role: "assistant",
-          content: `Great! I've generated your virtual try-on for ${currentProduct.name}. Here's how it looks on you!`,
+          content: `Great! I've generated your virtual try-on for ${effectiveProduct.name}. Here's how it looks on you!`,
           imageUrl: result.imageUrl,
           imageType: "try-on",
         },
@@ -540,7 +1103,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to generate try-on"
       logger.error("Try-on generation failed", {
-        productId: currentProduct.id,
+        productId: effectiveProduct.id,
         error: errorMessage,
       })
       
@@ -562,7 +1125,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
 
   // Keep old handleTryOn for backward compatibility
   const handleTryOn = async (file: File) => {
-    if (!currentProduct) return
+    if (!effectiveProduct) return
     // Upload file first, then use URLs
     const formData = new FormData()
     formData.append("halfBodyPhoto", file)
@@ -596,7 +1159,7 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
   }
 
   const handleTryOnClick = async () => {
-    if (!currentProduct || isGenerating) return
+    if (!effectiveProduct || isGenerating) return
 
     // Check if user images are already saved in context
     const hasSavedImages = userImages.fullBodyUrl || userImages.halfBodyUrl
@@ -659,9 +1222,9 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
       // Get request headers including Shopify customer ID if available
       const uploadHeaders: HeadersInit = {}
       if (typeof window !== "undefined") {
-        const shopifyCustomerId = (window as any).Shopify?.customer?.id
+        const shopifyCustomerId = getShopifyCustomerId()
         if (shopifyCustomerId) {
-          uploadHeaders["x-shopify-customer-id"] = shopifyCustomerId.toString()
+          uploadHeaders["x-shopify-customer-id"] = shopifyCustomerId
         }
       }
 
@@ -856,9 +1419,9 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
               <h3 className="font-bold text-base text-gray-900 dark:text-gray-100">
                 Hi, I'm your shopping assistant
               </h3>
-              {currentProduct && (
+              {effectiveProduct && (
                 <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                  Currently viewing <span className="font-medium">{currentProduct.name}</span>
+                  Currently viewing <span className="font-medium">{effectiveProduct.name}</span>
                 </p>
               )}
             </div>
@@ -878,10 +1441,10 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
             {/* Try Virtual Try On Button */}
             <button
               onClick={handleTryOnClick}
-              disabled={!currentProduct}
+              disabled={!effectiveProduct}
               className={cn(
                 "flex-1 px-4 py-2 bg-gray-800 dark:bg-gray-800 text-white rounded-lg text-sm font-medium hover:bg-gray-700 dark:hover:bg-gray-700 transition-colors flex items-center justify-center gap-2",
-                !currentProduct && "opacity-50 cursor-not-allowed"
+                !effectiveProduct && "opacity-50 cursor-not-allowed"
               )}
               aria-label="Try on this product"
             >

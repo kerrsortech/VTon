@@ -42,7 +42,26 @@ export async function POST(request: NextRequest) {
   try {
     logger.info("Try-on request started", { requestId })
 
+    // REQUIRE AUTHENTICATION: Get Shopify customer ID from form data or header (required)
     const formData = await request.formData()
+    let shopifyCustomerId = formData.get("shopifyCustomerId") as string | null
+    
+    // Also check header as fallback
+    if (!shopifyCustomerId) {
+      shopifyCustomerId = request.headers.get("x-shopify-customer-id")
+    }
+    
+    if (!shopifyCustomerId) {
+      logger.warn("Try-on request rejected: No Shopify customer ID provided", { requestId })
+      return NextResponse.json(
+        {
+          error: "Authentication required",
+          details: "You must be signed in to your Shopify account to use the virtual try-on feature. Please sign in and try again.",
+        },
+        { status: 401 },
+      )
+    }
+
     const userPhoto = formData.get("userPhoto") as File
     const fullBodyUrl = formData.get("fullBodyUrl") as string | null
     const halfBodyUrl = formData.get("halfBodyUrl") as string | null
@@ -63,7 +82,6 @@ export async function POST(request: NextRequest) {
     const productId = formData.get("productId") as string | null
     const customerId = formData.get("customerId") as string | null
     const customerEmail = formData.get("customerEmail") as string | null
-    const shopifyCustomerId = formData.get("shopifyCustomerId") as string | null
 
     // PRODUCTION: Fetch product images from Shopify Storefront API if shop domain and product ID are provided
     // This reduces theme coupling and improves performance by avoiding client-side image fetching

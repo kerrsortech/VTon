@@ -21,25 +21,29 @@ export async function POST(request: NextRequest) {
     const fullBodyPhoto = formData.get("fullBodyPhoto") as File | null
     const halfBodyPhoto = formData.get("halfBodyPhoto") as File | null
     
-    // Get user ID from headers or cookies
-    // Priority: 
-    // 1. Shopify customer ID from header (when authenticated in production)
-    // 2. Anonymous user ID from cookie (for session persistence)
-    // 3. Generate new anonymous ID (will be set as cookie)
+    // Get Shopify customer ID from header (preferred for authenticated users)
+    const shopifyCustomerId = request.headers.get("x-shopify-customer-id") || undefined
     
-    const shopifyCustomerId = request.headers.get("x-shopify-customer-id") || null
-    let userId = shopifyCustomerId || 
-                 request.headers.get("x-user-id") || 
-                 request.cookies.get("closelook-user-id")?.value
+    // Get or create anonymous user ID from cookie (for unauthenticated users)
+    let userId = request.cookies.get("closelook-user-id")?.value
     
-    // If no user ID exists, generate one and prepare to set cookie
+    // If no user ID exists, create a new anonymous user ID
     const isNewUser = !userId
     if (!userId) {
-      // Generate a secure anonymous user ID
-      userId = `user-${Date.now()}-${Math.random().toString(36).substring(2, 15)}`
+      userId = `user-${Date.now()}-${Math.random().toString(36).substring(7)}`
     }
     
-    logger.info("User image upload request received", { requestId, userId, hasFullBody: !!fullBodyPhoto, hasHalfBody: !!halfBodyPhoto, isNewUser })
+    // Prefer Shopify customer ID over anonymous user ID
+    const effectiveUserId = shopifyCustomerId || userId
+    
+    logger.info("User image upload request received", { 
+      requestId, 
+      userId: effectiveUserId, 
+      shopifyCustomerId,
+      hasFullBody: !!fullBodyPhoto, 
+      hasHalfBody: !!halfBodyPhoto,
+      isNewUser
+    })
 
     // Validate that at least one image is provided
     if (!fullBodyPhoto && !halfBodyPhoto) {
@@ -69,9 +73,9 @@ export async function POST(request: NextRequest) {
         )
       }
 
-      logger.debug("Uploading full body photo to Blob storage", { requestId, userId })
+      logger.debug("Uploading full body photo to Blob storage", { requestId, userId: effectiveUserId })
       const timestamp = Date.now()
-      const filename = `user-profiles/${userId}/full-body-${timestamp}.jpg`
+      const filename = `user-profiles/${effectiveUserId}/full-body-${timestamp}.jpg`
       
       try {
         const blob = await put(filename, fullBodyPhoto, {
@@ -79,22 +83,22 @@ export async function POST(request: NextRequest) {
           contentType: "image/jpeg",
         })
         uploadedImages.push({ type: "fullBody", url: blob.url, filename })
-        logger.info("Full body photo uploaded successfully", { requestId, userId, blobUrl: blob.url })
+        logger.info("Full body photo uploaded successfully", { requestId, userId: effectiveUserId, blobUrl: blob.url })
         
         // Save to database
         try {
           const userImage: UserImage = {
-            userId,
+            userId: effectiveUserId,
             shopifyCustomerId: shopifyCustomerId || null,
             imageType: "fullBody",
             imageUrl: blob.url,
             blobFilename: filename,
           }
           await saveUserImage(userImage)
-          logger.info("Full body photo saved to database", { requestId, userId })
+          logger.info("Full body photo saved to database", { requestId, userId: effectiveUserId })
         } catch (dbError) {
           // Log database error but don't fail the upload
-          logger.warn("Failed to save full body photo to database", { requestId, userId, error: dbError })
+          logger.warn("Failed to save full body photo to database", { requestId, userId: effectiveUserId, error: dbError })
         }
       } catch (error) {
         logger.error("Failed to upload full body photo", { requestId, error })
@@ -116,9 +120,9 @@ export async function POST(request: NextRequest) {
         )
       }
 
-      logger.debug("Uploading half body photo to Blob storage", { requestId, userId })
+      logger.debug("Uploading half body photo to Blob storage", { requestId, userId: effectiveUserId })
       const timestamp = Date.now()
-      const filename = `user-profiles/${userId}/half-body-${timestamp}.jpg`
+      const filename = `user-profiles/${effectiveUserId}/half-body-${timestamp}.jpg`
       
       try {
         const blob = await put(filename, halfBodyPhoto, {
@@ -126,22 +130,22 @@ export async function POST(request: NextRequest) {
           contentType: "image/jpeg",
         })
         uploadedImages.push({ type: "halfBody", url: blob.url, filename })
-        logger.info("Half body photo uploaded successfully", { requestId, userId, blobUrl: blob.url })
+        logger.info("Half body photo uploaded successfully", { requestId, userId: effectiveUserId, blobUrl: blob.url })
         
         // Save to database
         try {
           const userImage: UserImage = {
-            userId,
+            userId: effectiveUserId,
             shopifyCustomerId: shopifyCustomerId || null,
             imageType: "halfBody",
             imageUrl: blob.url,
             blobFilename: filename,
           }
           await saveUserImage(userImage)
-          logger.info("Half body photo saved to database", { requestId, userId })
+          logger.info("Half body photo saved to database", { requestId, userId: effectiveUserId })
         } catch (dbError) {
           // Log database error but don't fail the upload
-          logger.warn("Failed to save half body photo to database", { requestId, userId, error: dbError })
+          logger.warn("Failed to save half body photo to database", { requestId, userId: effectiveUserId, error: dbError })
         }
       } catch (error) {
         logger.error("Failed to upload half body photo", { requestId, error })
@@ -153,7 +157,8 @@ export async function POST(request: NextRequest) {
     const response = NextResponse.json({
       success: true,
       images: uploadedImages,
-      userId,
+      userId: effectiveUserId,
+      shopifyCustomerId,
       metadata: {
         timestamp: new Date().toISOString(),
         requestId,
@@ -162,16 +167,36 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    // Set user ID cookie for new users (30 days expiration)
-    if (isNewUser) {
-      response.cookies.set("closelook-user-id", userId, {
+    // Set cookie for anonymous users (only if no Shopify customer ID)
+    // This allows subsequent requests to identify the user
+    if (!shopifyCustomerId) {
+      const origin = request.headers.get("origin")
+      const isHttps = origin?.startsWith("https://") || false
+      const isLocalhost = origin?.includes("localhost") || origin?.includes("127.0.0.1") || false
+      
+      // For cross-origin requests, use SameSite=None with Secure
+      // For same-origin/localhost, use SameSite=Lax (more permissive)
+      const cookieOptions: {
+        httpOnly: boolean
+        secure: boolean
+        sameSite: "none" | "lax"
+        path: string
+        maxAge: number
+      } = {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: 60 * 60 * 24 * 30, // 30 days
         path: "/",
-      })
-      logger.info("Set new user ID cookie", { requestId, userId })
+        maxAge: 60 * 60 * 24 * 365, // 1 year
+        secure: isHttps || process.env.NODE_ENV === "production",
+        sameSite: (isHttps && !isLocalhost) ? "none" : "lax", // Use "none" for cross-origin HTTPS, "lax" for localhost
+      }
+      
+      response.cookies.set("closelook-user-id", userId, cookieOptions)
+      
+      if (isNewUser) {
+        logger.info("Set new user ID cookie", { requestId, userId, sameSite: cookieOptions.sameSite, secure: cookieOptions.secure })
+      } else {
+        logger.debug("Updated user ID cookie", { requestId, userId })
+      }
     }
 
     return addCorsHeaders(response, request)

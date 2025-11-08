@@ -28,33 +28,34 @@ export async function GET(request: NextRequest) {
   try {
     logger.info("Get user images request started", { requestId })
 
-    // Get user ID from headers or cookies
-    // Priority: 
-    // 1. Shopify customer ID from header (when authenticated in production)
-    // 2. User ID from header
-    // 3. Anonymous user ID from cookie
-    
+    // Get Shopify customer ID from header (preferred for authenticated users)
     const shopifyCustomerId = request.headers.get("x-shopify-customer-id") || undefined
+    
+    // Fallback to user ID from header or cookie (for anonymous users)
     const userId = request.headers.get("x-user-id") || 
                    request.cookies.get("closelook-user-id")?.value ||
                    undefined
 
-    if (!userId && !shopifyCustomerId) {
+    // Require at least one form of user identification
+    if (!shopifyCustomerId && !userId) {
       logger.warn("No user ID provided", { requestId })
       const response = NextResponse.json(
         {
-          error: "Missing user identification",
-          details: "Please provide user ID or Shopify customer ID",
+          error: "User identification required",
+          details: "Please upload an image first or sign in to your Shopify account.",
         },
-        { status: 400 },
+        { status: 401 },
       )
       return addCorsHeaders(response, request)
     }
+    
+    // Prefer Shopify customer ID over anonymous user ID
+    const effectiveUserId = shopifyCustomerId || userId
 
-    logger.debug("Fetching user images from database", { requestId, userId, shopifyCustomerId })
+    logger.debug("Fetching user images from database", { requestId, userId, shopifyCustomerId, effectiveUserId })
 
     try {
-      const userImages = await getUserImages(userId, shopifyCustomerId)
+      const userImages = await getUserImages(shopifyCustomerId ? undefined : userId, shopifyCustomerId)
       
       logger.info("User images retrieved successfully", { 
         requestId, 
@@ -67,7 +68,8 @@ export async function GET(request: NextRequest) {
       const response = NextResponse.json({
         success: true,
         images: userImages,
-        userId: shopifyCustomerId || userId,
+        userId: effectiveUserId,
+        shopifyCustomerId: shopifyCustomerId || null,
         metadata: {
           timestamp: new Date().toISOString(),
           requestId,
@@ -87,7 +89,8 @@ export async function GET(request: NextRequest) {
         const response = NextResponse.json({
           success: true,
           images: {},
-          userId: shopifyCustomerId || userId,
+          userId: effectiveUserId,
+          shopifyCustomerId: shopifyCustomerId || null,
           metadata: {
             timestamp: new Date().toISOString(),
             requestId,

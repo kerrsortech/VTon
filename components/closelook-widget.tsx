@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from "react"
 import { Upload, X, Lock } from "lucide-react"
 import { useCloselook } from "@/components/closelook-provider"
 import type { Product, TryOnResult } from "@/lib/closelook-types"
+import { getShopifyCustomerId } from "@/lib/shopify/customer-detector"
 
 interface CloselookWidgetProps {
   product: Product
@@ -35,14 +36,12 @@ export function CloselookWidget({ product, onTryOnComplete, className }: Closelo
 
       setIsLoadingImages(true)
       try {
-        // Get Shopify customer ID from window if available (for Shopify stores)
-        const shopifyCustomerId = typeof window !== "undefined" 
-          ? (window as any).Shopify?.customer?.id 
-          : null
+        // Get Shopify customer ID using robust detection method
+        const shopifyCustomerId = getShopifyCustomerId()
 
         const headers: HeadersInit = {}
         if (shopifyCustomerId) {
-          headers["x-shopify-customer-id"] = shopifyCustomerId.toString()
+          headers["x-shopify-customer-id"] = shopifyCustomerId
         }
 
         const response = await fetch("/api/user-images", {
@@ -81,11 +80,11 @@ export function CloselookWidget({ product, onTryOnComplete, className }: Closelo
   const getRequestHeaders = (): HeadersInit => {
     const headers: HeadersInit = {}
     
-    // Get Shopify customer ID from window if available (for Shopify stores)
+    // Get Shopify customer ID using robust detection method
     if (typeof window !== "undefined") {
-      const shopifyCustomerId = (window as any).Shopify?.customer?.id
+      const shopifyCustomerId = getShopifyCustomerId()
       if (shopifyCustomerId) {
-        headers["x-shopify-customer-id"] = shopifyCustomerId.toString()
+        headers["x-shopify-customer-id"] = shopifyCustomerId
       }
     }
     

@@ -9,7 +9,6 @@
     "dev:local": "next dev -p 3000",
     "shopify:dev": "shopify app dev",
     "dev:full": "concurrently \"npm run dev:local\" \"npm run shopify:dev\"",
-    "dashboard": "./scripts/run-dashboard.sh",
     "build": "npm run build:widgets && next build",
     "build:widgets": "cd widgets/chatbot-widget && npm install && npm run build && cd ../try-on-widget && npm install && npm run build",
     "prebuild": "npm run build:widgets",

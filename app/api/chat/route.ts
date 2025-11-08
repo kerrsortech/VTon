@@ -1,4 +1,5 @@
-import { GoogleGenerativeAI } from "@google/generative-ai"
+// import { GoogleGenerativeAI } from "@google/generative-ai" // Commented out - switching to Replicate API
+import Replicate from "replicate"
 import { type NextRequest, NextResponse } from "next/server"
 import { smartFilterProducts } from "@/lib/product-filter"
 import type { Product } from "@/lib/closelook-types"
@@ -14,6 +15,9 @@ import { detectQueryType } from "@/lib/chat-query-detector"
 import { getSession } from "@/lib/shopify/session-storage"
 import {
   fetchCustomerOrders,
+  fetchCustomerOrdersById,
+  fetchCustomerById,
+  fetchCustomerByEmail,
   fetchOrderByName,
   fetchStorePolicies,
 } from "@/lib/shopify/api-client"
@@ -51,7 +55,13 @@ import { ensureStorefrontToken } from "@/lib/shopify/storefront-token"
 import { setContext, getContext, setConversationHistory, getConversationHistory } from "@/lib/redis"
 import { buildContextString } from "@/lib/context"
 
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "")
+// Commented out - Google Cloud Gemini API (switching to Replicate)
+// const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY || "")
+
+// Initialize Replicate client
+const replicate = new Replicate({ 
+  auth: process.env.REPLICATE_API_TOKEN || "" 
+})
 
 // Handle OPTIONS requests for CORS preflight
 export async function OPTIONS(request: NextRequest) {
@@ -59,18 +69,33 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 // Validate API key on startup
-if (!process.env.GOOGLE_GEMINI_API_KEY) {
-  logger.warn("GOOGLE_GEMINI_API_KEY is not set. Chat functionality will be limited.")
+// Commented out - Google Cloud Gemini API validation
+// if (!process.env.GOOGLE_GEMINI_API_KEY) {
+//   logger.warn("GOOGLE_GEMINI_API_KEY is not set. Chat functionality will be limited.")
+// }
+
+// Validate Replicate API token on startup
+if (!process.env.REPLICATE_API_TOKEN) {
+  logger.warn("REPLICATE_API_TOKEN is not set. Chat functionality will be limited.")
 }
 
-// Build system prompt with customer name if available (enhanced version with new prompt system)
-function buildSystemPrompt(customerName?: string): string {
+// Build system prompt with customer information if available (enhanced version with new prompt system)
+function buildSystemPrompt(customerInfo?: { name?: string; email?: string; numberOfOrders?: number }): string {
   // Use the new enhanced system prompt from prompts.js
   const basePrompt = getSystemPrompt()
   
-  // Add personalized greeting if customer name is available
-  if (customerName) {
-    return `Hello ${customerName}! I'm your personal shopping assistant.\n\n${basePrompt}`
+  // Add personalized greeting if customer information is available
+  if (customerInfo?.name) {
+    let personalizedGreeting = `Hello ${customerInfo.name}! I'm your personal shopping assistant.`
+    
+    if (customerInfo.numberOfOrders !== undefined && customerInfo.numberOfOrders > 0) {
+      personalizedGreeting += ` I can see you've made ${customerInfo.numberOfOrders} order${customerInfo.numberOfOrders > 1 ? 's' : ''} with us.`
+    }
+    
+    // CRITICAL: Explicitly tell the chatbot the customer's name
+    personalizedGreeting += `\n\n🔴 IMPORTANT: The customer's name is "${customerInfo.name}". You have direct access to this information. When the customer asks "What's my name?" or "Do you know my name?", you MUST tell them their name is "${customerInfo.name}". Never say you don't have access to this information - you do have it.`
+    
+    return `${personalizedGreeting}\n\n${basePrompt}`
   }
   
   return basePrompt
@@ -387,23 +412,66 @@ export async function POST(request: NextRequest) {
     const shopDomain = context?.shop_domain || shop || requestBody.shop_domain
     const pageType = context?.page_type || pageContext || 'other'
     
+    // ============ CRITICAL FIX: Recover product context from conversation history ============
+    // If no product context is available, try to recover from previous messages in this session
+    let recoveredProductContext: any = null
+    if (!currentProductFromBody && !context?.current_product && !currentProduct && conversationHistory && conversationHistory.length > 0) {
+      try {
+        // Get conversation history from Redis if available
+        const storedHistory = await getConversationHistory(sessionId)
+        const historyToCheck = storedHistory || conversationHistory
+        
+        // Look through previous messages for product context
+        // Check if any previous messages had product context
+        for (let i = historyToCheck.length - 1; i >= 0; i--) {
+          const msg = historyToCheck[i]
+          // Look for assistant messages that mention products or product IDs
+          if (msg.role === "assistant" && msg.content) {
+            // Try to extract product ID from assistant's response
+            // Look for product mentions or product IDs in the response
+            const productIdMatch = msg.content.match(/product[_-]?id[:\s]+([a-zA-Z0-9-_]+)/i)
+            if (productIdMatch) {
+              recoveredProductContext = { id: productIdMatch[1] }
+              logger.info('[Chat API] Product context recovered from conversation history', {
+                productId: recoveredProductContext.id,
+                fromMessage: i
+              })
+              break
+            }
+          }
+        }
+        
+        // Also check if we have stored context in Redis with product info
+        if (!recoveredProductContext && context && context.current_product) {
+          recoveredProductContext = context.current_product
+          logger.info('[Chat API] Product context recovered from stored context', {
+            productId: recoveredProductContext.id
+          })
+        }
+      } catch (error) {
+        logger.warn('[Chat API] Failed to recover product context from history', { error })
+      }
+    }
+
     // ============ CRITICAL FIX: Extract product ID from multiple sources ============
-    // Priority: 1. currentProductFromBody (from frontend payload), 2. context.current_product, 3. currentProduct (from validation)
+    // Priority: 1. currentProductFromBody (from frontend payload), 2. context.current_product, 3. recoveredProductContext, 4. currentProduct (from validation)
     let productId = currentProductFromBody?.id || 
                    context?.current_product?.id || 
                    context?.current_product?.gid || 
+                   recoveredProductContext?.id ||
                    currentProduct?.id
     
     logger.info('[Chat API] Product ID extracted:', { 
       productId,
       fromBody: currentProductFromBody?.id,
       fromContext: context?.current_product?.id || context?.current_product?.gid,
+      fromHistory: recoveredProductContext?.id,
       fromValidated: currentProduct?.id
     })
     
     let fetchedProducts: Product[] = []
     
-    // ============ CRITICAL FIX: Use currentProductFromBody as primary source ============
+    // ============ CRITICAL FIX: Use currentProductFromBody as primary source with fallback ============
     let productToFetch: { id?: string; handle?: string } | null = null
     
     if (currentProductFromBody && currentProductFromBody.id) {
@@ -420,6 +488,12 @@ export async function POST(request: NextRequest) {
         handle: context.current_product.handle || null
       }
       logger.info('[Chat API] Product to fetch from context:', productToFetch)
+    } else if (recoveredProductContext && (recoveredProductContext.id || recoveredProductContext.gid || recoveredProductContext.handle)) {
+      productToFetch = {
+        id: recoveredProductContext.id || recoveredProductContext.gid,
+        handle: recoveredProductContext.handle || null
+      }
+      logger.info('[Chat API] Product to fetch from recovered history:', productToFetch)
     } else if (currentProduct?.id) {
       productToFetch = {
         id: currentProduct.id,
@@ -428,6 +502,7 @@ export async function POST(request: NextRequest) {
       logger.info('[Chat API] Product to fetch from validated input:', productToFetch)
     }
     
+    // ============ CRITICAL FIX: Build fetchedCurrentProduct with fallback to recovered context ============
     let fetchedCurrentProduct: Product | undefined = currentProductFromBody ? {
       id: currentProductFromBody.id,
       name: currentProductFromBody.title || currentProductFromBody.name || "Product",
@@ -444,7 +519,11 @@ export async function POST(request: NextRequest) {
       id: context.current_product.id || context.current_product.gid,
       name: context.current_product.title || context.current_product.name,
       handle: context.current_product.handle
-    } : undefined))
+    } : (recoveredProductContext ? {
+      id: recoveredProductContext.id || recoveredProductContext.gid,
+      name: recoveredProductContext.title || recoveredProductContext.name || "Product",
+      handle: recoveredProductContext.handle
+    } : undefined)))
     
     if (shopDomain) {
       try {
@@ -864,7 +943,9 @@ export async function POST(request: NextRequest) {
     // This ensures we only send relevant products to Gemini, making responses content-aware
     if (needsProductFiltering || isLargeCatalog || enhancedIntent?.wantsRecommendations) {
       try {
-        const apiKey = process.env.GOOGLE_GEMINI_API_KEY || ""
+        // Commented out - Google Cloud Gemini API key (switching to Replicate)
+        // const apiKey = process.env.GOOGLE_GEMINI_API_KEY || ""
+        const apiKey = "" // Disabled - using Replicate for main chatbot API
         
         // Extract query intent first (helps determine how many products to retrieve)
                  // Use enhanced intent if available, otherwise fallback to semantic search
@@ -880,10 +961,12 @@ export async function POST(request: NextRequest) {
              filters: enhancedIntent.filters
            } as unknown as QueryIntent
         } else if (apiKey) {
-          queryIntent = await extractQueryIntent(message, apiKey).catch((error) => {
-            logger.warn("Intent extraction failed, using fallback", { error: error instanceof Error ? error.message : String(error) })
-            return null
-          })
+          // Commented out - Google Cloud Gemini API call for intent extraction
+          // queryIntent = await extractQueryIntent(message, apiKey).catch((error) => {
+          //   logger.warn("Intent extraction failed, using fallback", { error: error instanceof Error ? error.message : String(error) })
+          //   return null
+          // })
+          queryIntent = null // Disabled - will use fallback methods
         }
 
         // Retrieve only relevant products (top N based on query intent)
@@ -919,8 +1002,8 @@ export async function POST(request: NextRequest) {
             } else {
               relevantProducts = await retrieveRelevantProducts(allProductsToUse as Product[], message, {
                 maxProducts: productLimit,
-                useGeminiIntent: !!apiKey,
-                apiKey: apiKey,
+                useGeminiIntent: false, // Disabled - using Replicate for main chatbot API
+                apiKey: "", // Disabled - using Replicate for main chatbot API
               })
             }
           }
@@ -966,15 +1049,83 @@ export async function POST(request: NextRequest) {
       logger.debug(`Using all products from small catalog (${allProductsToUse.length} products)`)
     }
 
-    // Fetch order and policy data if needed (only when explicitly asked)
+    // Fetch customer information and order data if needed
+    let customerInfo: any = null
     let orderData: any = null
     let policies: any = null
 
-    // Fetch orders only if query is about orders/account and we have customer info or order number
+    // Fetch customer information when customer ID is available (always fetch for context)
     // NOTE: shop domain should come from Shopify context (window.Shopify.shop) which is always myshopify.com
     // Even when customer is browsing on custom domain, Shopify context provides the myshopify.com domain
     // Use shopDomain from context if available, otherwise use shop
     const shopForOrders = shopDomain || shop
+    
+    // Always fetch customer information if we have customer ID (for chatbot awareness)
+    // Even if fetching fails, we'll use customerName from widget as fallback
+    if (shopForOrders && customerInternal?.id) {
+      try {
+        const normalizedShop = shopForOrders.includes('.myshopify.com') 
+          ? shopForOrders 
+          : shopForOrders.replace(/^https?:\/\//, '').replace(/\/$/, '')
+        const session = await getSession(normalizedShop)
+        
+        if (session && session.accessToken) {
+          try {
+            // Fetch customer information by ID
+            customerInfo = await fetchCustomerById(session, customerInternal.id)
+            if (customerInfo) {
+              logger.info("Customer information fetched successfully", {
+                customerId: customerInternal.id,
+                email: customerInfo.email,
+                name: `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim(),
+                numberOfOrders: customerInfo.numberOfOrders
+              })
+            } else {
+              logger.warn("Customer information not found by ID, will use customerName from widget", {
+                customerId: customerInternal.id
+              })
+            }
+          } catch (customerError) {
+            logger.warn("Failed to fetch customer information by ID", { 
+              error: customerError instanceof Error ? customerError.message : String(customerError),
+              customerId: customerInternal.id
+            })
+            // Try fetching by email as fallback
+            if (customerInternal.email) {
+              try {
+                customerInfo = await fetchCustomerByEmail(session, customerInternal.email)
+                if (customerInfo) {
+                  logger.info("Customer information fetched by email successfully", {
+                    email: customerInternal.email
+                  })
+                }
+              } catch (emailError) {
+                logger.warn("Failed to fetch customer by email", { 
+                  error: emailError instanceof Error ? emailError.message : String(emailError) 
+                })
+              }
+            }
+          }
+        } else {
+          logger.debug("No session or access token for customer info fetch, will use customerName from widget", {
+            hasSession: !!session,
+            hasAccessToken: !!session?.accessToken
+          })
+        }
+      } catch (error) {
+        logger.warn("Error fetching customer information", { 
+          error: error instanceof Error ? error.message : String(error) 
+        })
+        // Continue without customer info - will use customerName from widget
+      }
+    } else {
+      logger.debug("No shop domain or customer ID for fetching customer info, will use customerName from widget", {
+        hasShop: !!shopForOrders,
+        hasCustomerId: !!customerInternal?.id
+      })
+    }
+
+    // Fetch orders only if query is about orders/account and we have customer info or order number
     if (shopForOrders && shouldFetchOrders) {
       try {
         // Get Shopify session for Admin API
@@ -999,43 +1150,70 @@ export async function POST(request: NextRequest) {
                 })
               }
             }
-            // Option 2: Use customer info from storefront context (internal fields only)
-            else if (customerInternal) {
-              // If we have customer email, use Admin API
-              if (customerInternal.email) {
-                try {
-                  const orders = await fetchCustomerOrders(session, customerInternal.email, 10)
-                  if (orders.length > 0) {
-                    orderData = { orders }
-                  }
-                } catch (emailError) {
-                  logger.warn("Failed to fetch orders by customer email", { 
-                    error: emailError instanceof Error ? emailError.message : String(emailError) 
+            // Option 2: Use customer ID to fetch orders (preferred method)
+            else if (customerInternal?.id) {
+              try {
+                const orders = await fetchCustomerOrdersById(session, customerInternal.id, 10)
+                if (orders.length > 0) {
+                  orderData = { orders }
+                  logger.info("Orders fetched by customer ID", { 
+                    customerId: customerInternal.id,
+                    orderCount: orders.length 
                   })
+                }
+              } catch (idError) {
+                logger.warn("Failed to fetch orders by customer ID", { 
+                  error: idError instanceof Error ? idError.message : String(idError) 
+                })
+                // Fallback to email if available
+                if (customerInternal.email) {
+                  try {
+                    const orders = await fetchCustomerOrders(session, customerInternal.email, 10)
+                    if (orders.length > 0) {
+                      orderData = { orders }
+                    }
+                  } catch (emailError) {
+                    logger.warn("Failed to fetch orders by customer email", { 
+                      error: emailError instanceof Error ? emailError.message : String(emailError) 
+                    })
+                  }
                 }
               }
-              // If we have customer access token, try Storefront API
-              else if (customerInternal.accessToken) {
-                try {
-                  const { fetchCustomerOrdersFromStorefront } = await import("@/lib/shopify/storefront-client")
-                  // Get storefront token from env or session
-                  const storefrontToken = process.env.SHOPIFY_STOREFRONT_TOKEN || ""
-                  if (storefrontToken && customerInternal.accessToken) {
-                    const storefrontOrders = await fetchCustomerOrdersFromStorefront(
-                      shop,
-                      storefrontToken,
-                      customerInternal.accessToken,
-                      10
-                    )
-                    if (storefrontOrders.length > 0) {
-                      orderData = { orders: storefrontOrders }
-                    }
-                  }
-                } catch (storefrontError) {
-                  logger.warn("Failed to fetch orders from storefront API", { 
-                    error: storefrontError instanceof Error ? storefrontError.message : String(storefrontError) 
-                  })
+            }
+            // Option 3: Use customer email as fallback
+            else if (customerInternal?.email) {
+              try {
+                const orders = await fetchCustomerOrders(session, customerInternal.email, 10)
+                if (orders.length > 0) {
+                  orderData = { orders }
                 }
+              } catch (emailError) {
+                logger.warn("Failed to fetch orders by customer email", { 
+                  error: emailError instanceof Error ? emailError.message : String(emailError) 
+                })
+              }
+            }
+            // Option 4: Use customer access token for Storefront API
+            else if (customerInternal?.accessToken) {
+              try {
+                const { fetchCustomerOrdersFromStorefront } = await import("@/lib/shopify/storefront-client")
+                // Get storefront token from env or session
+                const storefrontToken = process.env.SHOPIFY_STOREFRONT_TOKEN || ""
+                if (storefrontToken && customerInternal.accessToken) {
+                  const storefrontOrders = await fetchCustomerOrdersFromStorefront(
+                    shop,
+                    storefrontToken,
+                    customerInternal.accessToken,
+                    10
+                  )
+                  if (storefrontOrders.length > 0) {
+                    orderData = { orders: storefrontOrders }
+                  }
+                }
+              } catch (storefrontError) {
+                logger.warn("Failed to fetch orders from storefront API", { 
+                  error: storefrontError instanceof Error ? storefrontError.message : String(storefrontError) 
+                })
               }
             }
             // Option 3: Extract email from query if mentioned
@@ -1123,10 +1301,21 @@ export async function POST(request: NextRequest) {
         available: true, // Assume available if fetched from Shopify
       } : context?.current_product,
       shop_domain: shopDomain || context?.shop_domain,
-      customer: context?.customer || (customerInternal ? {
+      customer: context?.customer || (customerInfo ? {
+        id: customerInfo.id || customerInternal?.id,
+        email: customerInfo.email,
+        firstName: customerInfo.firstName,
+        lastName: customerInfo.lastName,
+        name: `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim() || customerName,
+        phone: customerInfo.phone,
+        numberOfOrders: customerInfo.numberOfOrders,
+        totalSpent: customerInfo.totalSpent,
+        logged_in: true
+      } : (customerInternal ? {
         id: customerInternal.id,
+        email: customerInternal.email,
         logged_in: !!customerInternal.id
-      } : null),
+      } : null)),
       cart: context?.cart || null,
     }
     
@@ -1167,10 +1356,22 @@ export async function POST(request: NextRequest) {
         available: true,
         images: p.images || []
       })),
-      customer: customerInternal ? {
+      customer: customerInfo ? {
+        logged_in: true,
+        id: customerInfo.id || customerInternal?.id,
+        email: customerInfo.email,
+        firstName: customerInfo.firstName,
+        lastName: customerInfo.lastName,
+        name: `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim() || customerName,
+        phone: customerInfo.phone,
+        numberOfOrders: customerInfo.numberOfOrders,
+        totalSpent: customerInfo.totalSpent,
+        addresses: customerInfo.addresses
+      } : (customerInternal ? {
         logged_in: !!customerInternal.id,
-        id: customerInternal.id
-      } : undefined,
+        id: customerInternal.id,
+        email: customerInternal.email
+      } : undefined),
       cart: context?.cart || null
     }
 
@@ -1184,21 +1385,106 @@ export async function POST(request: NextRequest) {
       contextMessage = buildContextString(enrichedContext)
     }
     
+    // Add customer information to context message if available
+    // Use customerInfo if fetched, otherwise use customerName from widget
+    const customerNameToUse = customerInfo 
+      ? `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim() || customerName
+      : customerName
+    
+    // Build customer context FIRST (before everything else) so it's impossible to miss
+    let customerContextSection = ""
+    if (customerInfo || customerNameToUse) {
+      customerContextSection = `\n\n═══════════════════════════════════════════════════════════\n`
+      customerContextSection += `👤 CUSTOMER INFORMATION (YOU HAVE DIRECT ACCESS TO THIS):\n`
+      customerContextSection += `═══════════════════════════════════════════════════════════\n\n`
+      
+      // Always include customer name prominently
+      if (customerNameToUse) {
+        customerContextSection += `🔴 CUSTOMER NAME: "${customerNameToUse}"\n`
+        customerContextSection += `\n⚠️ CRITICAL INSTRUCTIONS:\n`
+        customerContextSection += `- The customer's name is "${customerNameToUse}"\n`
+        customerContextSection += `- When the customer asks "What's my name?" or "Do you know my name?", you MUST answer: "Your name is ${customerNameToUse}"\n`
+        customerContextSection += `- NEVER say "I don't have access to that information" or "I have no memory" - you DO have this information\n`
+        customerContextSection += `- Answer direct questions about the customer's name, account, or orders directly - do NOT give product recommendations\n\n`
+      }
+      
+      if (customerInfo) {
+        if (customerInfo.firstName || customerInfo.lastName) {
+          customerContextSection += `FULL NAME: ${customerInfo.firstName || ''} ${customerInfo.lastName || ''}\n`
+        }
+        if (customerInfo.email) {
+          customerContextSection += `EMAIL: ${customerInfo.email}\n`
+        }
+        if (customerInfo.phone) {
+          customerContextSection += `PHONE: ${customerInfo.phone}\n`
+        }
+        if (customerInfo.numberOfOrders !== undefined) {
+          customerContextSection += `TOTAL ORDERS: ${customerInfo.numberOfOrders}\n`
+        }
+        if (customerInfo.totalSpent) {
+          customerContextSection += `TOTAL SPENT: ${customerInfo.totalSpent.amount} ${customerInfo.totalSpent.currencyCode}\n`
+        }
+      }
+      
+      customerContextSection += `\n═══════════════════════════════════════════════════════════\n\n`
+      
+      // Put customer context at the VERY TOP of context message
+      contextMessage = customerContextSection + contextMessage
+    }
+    
+    // Add order history to context if available and relevant
+    if (orderData && orderData.orders && orderData.orders.length > 0) {
+      let orderContext = `\n\n═══════════════════════════════════════════════════════════\n`
+      orderContext += `📦 ORDER HISTORY (${orderData.orders.length} recent orders):\n`
+      orderContext += `═══════════════════════════════════════════════════════════\n\n`
+      
+      orderData.orders.slice(0, 5).forEach((order: any, index: number) => {
+        orderContext += `ORDER ${index + 1}:\n`
+        orderContext += `  Order Number: ${order.name || 'N/A'}\n`
+        orderContext += `  Date: ${order.createdAt || 'N/A'}\n`
+        orderContext += `  Status: ${order.displayFulfillmentStatus || order.displayFinancialStatus || 'N/A'}\n`
+        if (order.totalPriceSet?.shopMoney) {
+          orderContext += `  Total: ${order.totalPriceSet.shopMoney.amount} ${order.totalPriceSet.shopMoney.currencyCode}\n`
+        }
+        if (order.lineItems?.edges && order.lineItems.edges.length > 0) {
+          orderContext += `  Items:\n`
+          order.lineItems.edges.slice(0, 3).forEach((item: any) => {
+            orderContext += `    - ${item.node.title} (Qty: ${item.node.quantity})\n`
+          })
+        }
+        orderContext += `\n`
+      })
+      
+      orderContext += `⚠️ IMPORTANT: Use this order history when the customer asks about their past purchases, order status, or wants recommendations based on their purchase history.\n\n`
+      
+      contextMessage = contextMessage + orderContext
+    }
+
     // Add additional context for Gemini
     if (pageType === "home") {
       contextMessage = `\n\nPAGE CONTEXT: The customer is browsing the home page/catalog.\n` + contextMessage
     } else if (pageType === "product") {
       // PRIMARY PIPELINE: Send complete product details fetched from Shopify to Gemini
       // This is the main way to provide product information - fetched directly from Shopify API
+      // CRITICAL: Always include product context - it's essential for product page conversations
       if (finalCurrentProduct && (finalCurrentProduct.id || finalCurrentProduct.name)) {
         // Build comprehensive product details message
         // ALWAYS include product context even if some fields are missing
         let productDetails = `\n\n═══════════════════════════════════════════════════════════\n`
-        productDetails += `🎯 PRODUCT THE CUSTOMER IS VIEWING (Fetched from Shopify API):\n`
+        productDetails += `🎯 PRODUCT THE CUSTOMER IS CURRENTLY VIEWING (Fetched from Shopify API):\n`
         productDetails += `═══════════════════════════════════════════════════════════\n\n`
         
+        productDetails += `🔴 CRITICAL: The customer is viewing this product RIGHT NOW on the product page.\n`
+        productDetails += `When the customer asks about "this product", "this item", "it", or uses "this" in any context, they are ALWAYS referring to the product below.\n\n`
+        
         productDetails += `PRODUCT ID: ${finalCurrentProduct.id || "N/A"}\n`
-        productDetails += `PRODUCT NAME: ${finalCurrentProduct.name || "N/A"}\n\n`
+        productDetails += `PRODUCT NAME: ${finalCurrentProduct.name || "N/A"}\n`
+        
+        // Include product URL if available
+        if (finalCurrentProduct.url) {
+          productDetails += `PRODUCT URL: ${finalCurrentProduct.url}\n`
+        }
+        productDetails += `\n`
         
         if (finalCurrentProduct.description) {
           productDetails += `DESCRIPTION:\n${finalCurrentProduct.description}\n\n`
@@ -1287,17 +1573,19 @@ export async function POST(request: NextRequest) {
         })
         
         // Try to fetch page content as fallback
+        // Commented out - Google Cloud Gemini API call for product page analysis
         try {
-          const apiKey = process.env.GOOGLE_GEMINI_API_KEY
-          if (apiKey) {
-            productPageAnalysis = await analyzeProductPage(productUrl, apiKey).catch((error) => {
-              logger.warn("Fallback product page analysis failed", { 
-                error: error instanceof Error ? error.message : String(error),
-                productUrl 
-              })
-              return null
-            })
-          }
+          // const apiKey = process.env.GOOGLE_GEMINI_API_KEY
+          // if (apiKey) {
+          //   productPageAnalysis = await analyzeProductPage(productUrl, apiKey).catch((error) => {
+          //     logger.warn("Fallback product page analysis failed", { 
+          //       error: error instanceof Error ? error.message : String(error),
+          //       productUrl 
+          //     })
+          //     return null
+          //   })
+          // }
+          // Disabled - product page analysis using Google Cloud Gemini API
         } catch (error) {
           logger.warn("Error in fallback product page analysis", { error })
         }
@@ -1439,9 +1727,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Add customer name for personalization if available
-    if (customerName) {
-      contextMessage += `\n\nCUSTOMER NAME: ${customerName}\nUse the customer's name to personalize your responses when appropriate.`
+    // Add customer name reminder at the end (redundant but ensures it's visible)
+    if (customerNameToUse) {
+      contextMessage += `\n\n═══════════════════════════════════════════════════════════\n`
+      contextMessage += `🔴 CUSTOMER NAME REMINDER:\n`
+      contextMessage += `═══════════════════════════════════════════════════════════\n`
+      contextMessage += `The customer's name is: "${customerNameToUse}"\n`
+      contextMessage += `You MUST use this name when the customer asks "What's my name?" or similar questions.\n`
+      contextMessage += `You have direct access to this information - never say you don't have it.\n`
+      contextMessage += `═══════════════════════════════════════════════════════════\n`
     }
 
     // SCALABILITY: Only send relevant products to LLM, not entire catalog
@@ -1466,8 +1760,24 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Build system prompt with customer name for personalization
-    let systemPrompt = buildSystemPrompt(customerName)
+    // Build system prompt with customer information
+    // Always use customer name if available (from fetched info or widget)
+    const customerNameForPrompt = customerInfo 
+      ? `${customerInfo.firstName || ''} ${customerInfo.lastName || ''}`.trim() || customerName
+      : customerName
+    
+    const customerInfoForPrompt = customerNameForPrompt ? {
+      name: customerNameForPrompt,
+      email: customerInfo?.email,
+      numberOfOrders: customerInfo?.numberOfOrders
+    } : undefined
+    
+    let systemPrompt = buildSystemPrompt(customerInfoForPrompt)
+    
+    // Add explicit customer name instruction if we have it
+    if (customerNameForPrompt) {
+      systemPrompt += `\n\n🔴 CRITICAL REMINDER: The customer's name is "${customerNameForPrompt}". This information is available to you in the context message below. When the customer asks about their name, you MUST tell them their name is "${customerNameForPrompt}". Never say you don't have access to this information.`
+    }
     
     // CRITICAL: If we're on a product page and have product data, emphasize it strongly
     if (pageType === "product" && finalCurrentProduct && (finalCurrentProduct.id || finalCurrentProduct.name)) {
@@ -1547,47 +1857,123 @@ export async function POST(request: NextRequest) {
       })
     }
     
-    const messages = [
-      {
-        role: "user",
-        parts: [{ text: systemPrompt + contextMessage }],
-      },
-      {
-        role: "model",
-        parts: [
-          {
-            text: "Hello! I'm your Closelook sales assistant. I'm here to help you find the perfect products and answer any questions you have. How can I assist you today?",
-          },
-        ],
-      },
-      ...history.map((msg: any) => ({
-        role: msg.role === "user" ? "user" : "model",
-        parts: [{ text: msg.content }],
-      })),
-      {
-        role: "user",
-        parts: [{ text: userMessage }],
-      },
-    ]
+    // Build the complete system instruction with customer information
+    // Put customer name at the very top so it's impossible to miss
+    let completeSystemInstruction = systemPrompt
+    
+    // Add customer name reminder at the top if available
+    // CRITICAL: Always include customer name prominently if available
+    if (customerNameForPrompt) {
+      completeSystemInstruction = `🔴 CRITICAL INSTRUCTION - READ THIS FIRST:\n\nThe customer's name is "${customerNameForPrompt}".\n\nWhen the customer asks "What's my name?" or "Do you know my name?", you MUST answer directly: "Your name is ${customerNameForPrompt}".\n\nNEVER say:\n- "I don't have access to that information"\n- "I have no memory of past conversations"\n- "I don't know your name"\n\nYou DO have access to this information - it's provided in the context below.\n\nAnswer direct questions directly. Do NOT give product recommendations when asked about name, account, or orders.\n\nUse the customer's name naturally in your responses when appropriate to personalize the conversation.\n\n═══════════════════════════════════════════════════════════\n\n` + completeSystemInstruction
+      
+      logger.info('[Chat API] Customer name included in system prompt', { 
+        customerName: customerNameForPrompt 
+      })
+    } else {
+      logger.debug('[Chat API] No customer name available for system prompt')
+    }
+    
+    // Combine system prompt with context message
+    // The context message already has customer info at the top, so this ensures it's visible
+    const fullContext = completeSystemInstruction + "\n\n" + contextMessage
+    
+    // Log the full context being sent (for debugging - truncated)
+    if (pageType === "product" && finalCurrentProduct) {
+      logger.info('[Chat API] Full context being sent to Replicate', {
+        hasCustomerName: !!customerNameForPrompt,
+        customerName: customerNameForPrompt || "N/A",
+        hasProduct: !!finalCurrentProduct,
+        productId: finalCurrentProduct.id,
+        productName: finalCurrentProduct.name,
+        contextLength: fullContext.length,
+        systemInstructionLength: completeSystemInstruction.length,
+        contextMessageLength: contextMessage.length
+      })
+    }
+    
+    // Commented out - Google Cloud Gemini API message format
+    // const messages = [
+    //   {
+    //     role: "user",
+    //     parts: [{ text: fullContext }],
+    //   },
+    //   {
+    //     role: "model",
+    //     parts: [
+    //       {
+    //         text: customerNameForPrompt 
+    //           ? `Hello ${customerNameForPrompt}! I'm your Closelook sales assistant. I'm here to help you find the perfect products and answer any questions you have. How can I assist you today?`
+    //           : "Hello! I'm your Closelook sales assistant. I'm here to help you find the perfect products and answer any questions you have. How can I assist you today?",
+    //       },
+    //     ],
+    //   },
+    //   ...history.map((msg: any) => ({
+    //     role: msg.role === "user" ? "user" : "model",
+    //     parts: [{ text: msg.content }],
+    //   })),
+    //   {
+    //     role: "user",
+    //     parts: [{ text: userMessage }],
+    //   },
+    // ]
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" })
+    // Commented out - Google Cloud Gemini API call
+    // const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" })
+    // const chat = model.startChat({
+    //   history: messages.slice(0, -1),
+    // })
 
-    const chat = model.startChat({
-      history: messages.slice(0, -1),
-    })
+    // Build conversation history for Replicate API
+    // Format: Include system instruction, context, and conversation history in the prompt
+    let conversationHistory = ""
+    if (history && history.length > 0) {
+      conversationHistory = "\n\nConversation History:\n" + history.map((msg: any) => {
+        const role = msg.role === "user" ? "User" : "Assistant"
+        return `${role}: ${msg.content}`
+      }).join("\n")
+    }
+    
+    // Build the complete prompt for Replicate
+    const completePrompt = `${fullContext}${conversationHistory}\n\nUser: ${userMessage}\n\nAssistant:`
 
-    // Generate response with timeout protection
+    // Generate response with timeout protection using Replicate API
     let text: string
     try {
       const result = await Promise.race([
-        chat.sendMessage(message),
+        replicate.run("google/gemini-2.5-flash", {
+          input: {
+            prompt: completePrompt,
+            system_instruction: completeSystemInstruction,
+            temperature: 0.7,
+            top_p: 0.95,
+            max_output_tokens: 2048,
+            thinking_budget: 0
+          }
+        }),
         new Promise<never>((_, reject) => 
           setTimeout(() => reject(new Error("AI response timeout")), 30000)
         ),
       ]) as any
       
-      const response = result.response
-      text = response.text()
+      // Replicate returns a stream/iterator, so we need to collect the output
+      let fullResponse = ""
+      if (result && typeof result[Symbol.asyncIterator] === 'function') {
+        // Handle streaming response
+        for await (const chunk of result) {
+          fullResponse += chunk
+        }
+      } else if (typeof result === 'string') {
+        // Handle string response
+        fullResponse = result
+      } else if (Array.isArray(result)) {
+        // Handle array response
+        fullResponse = result.join('')
+      } else {
+        // Try to extract text from response object
+        fullResponse = result?.text || result?.output || String(result)
+      }
+      
+      text = fullResponse.trim()
       
       // Validate response
       if (!text || typeof text !== "string") {
