@@ -1890,26 +1890,8 @@ export async function POST(request: NextRequest) {
       return addCorsHeaders(fallbackResponse, request)
     }
 
-    // Extract product recommendations from LLM response
-    // This handles both PRODUCT_RECOMMENDATION JSON format and plain text mentions
-    const { cleanedText, extractedProducts: llmRecommendations } = extractProductsFromResponse(
-      text,
-      allProductsToUse || [],
-    )
-    
-    // Enrich LLM recommendations with full product details (imageUrl, url) for widget
-    const enrichedLlmRecommendations = llmRecommendations.map((rec: any) => {
-      const fullProduct = allProductsToUse.find((p: Product) => p.id === rec.id)
-      return {
-        ...rec,
-        imageUrl: fullProduct?.images?.[0] || rec.imageUrl,
-        url: shop && fullProduct 
-          ? `https://${shop.replace(/\.myshopify\.com$/, '')}.myshopify.com/products/${rec.id}`
-          : rec.url || `/product/${rec.id}`,
-      }
-    })
-
     // Extract ticket creation request if user confirms ticket creation
+    // Check this BEFORE extracting products so we can clean the response properly
     let ticketCreated = false
     let ticketMessage = ""
     
@@ -1928,13 +1910,19 @@ export async function POST(request: NextRequest) {
               session_id: sessionId,
               shop_domain: shop || '',
               customer_id: customerInternal?.id || 'guest'
+            },
+            {
+              customerName: customerName,
+              customerEmail: customerInternal?.email,
+              conversationHistory: conversationHistory || []
             }
           )
           
-          // Format response with ticket ID
+          // Format response with ticket ID - remove technical markers BEFORE extracting products
           text = formatTicketResponse(text, ticketId)
           ticketCreated = true
-          ticketMessage = `✅ Support ticket created! Reference #${ticketId}. Our team will contact you within 24 hours.`
+          // More human-friendly message
+          ticketMessage = `I've created a support ticket for you! Our team will review your request and get back to you within 24 hours. Your ticket reference is #${ticketId}.`
         } catch (error) {
           logger.error('[Chat API] Failed to create ticket via enhanced system', { error: error instanceof Error ? error.message : String(error) })
           // Continue with fallback ticket creation
@@ -1955,14 +1943,39 @@ export async function POST(request: NextRequest) {
             session_id: sessionId,
             shop_domain: shop || '',
             customer_id: customerInternal?.id || 'guest'
+          },
+          {
+            customerName: customerName,
+            customerEmail: customerInternal?.email,
+            conversationHistory: conversationHistory || []
           }
         )
         ticketCreated = true
-        ticketMessage = `✅ Support ticket created! Reference #${ticketId}. Our team will contact you within 24 hours.`
+        ticketMessage = `I've created a support ticket for you! Our team will review your request and get back to you within 24 hours. Your ticket reference is #${ticketId}.`
       } catch (error) {
         logger.error('[Chat API] Failed to create ticket via intent', { error: error instanceof Error ? error.message : String(error) })
       }
     }
+
+    // Extract product recommendations from LLM response
+    // This handles both PRODUCT_RECOMMENDATION JSON format and plain text mentions
+    // Do this AFTER ticket formatting so cleanedText doesn't contain markers
+    const { cleanedText, extractedProducts: llmRecommendations } = extractProductsFromResponse(
+      text,
+      allProductsToUse || [],
+    )
+    
+    // Enrich LLM recommendations with full product details (imageUrl, url) for widget
+    const enrichedLlmRecommendations = llmRecommendations.map((rec: any) => {
+      const fullProduct = allProductsToUse.find((p: Product) => p.id === rec.id)
+      return {
+        ...rec,
+        imageUrl: fullProduct?.images?.[0] || rec.imageUrl,
+        url: shop && fullProduct 
+          ? `https://${shop.replace(/\.myshopify\.com$/, '')}.myshopify.com/products/${rec.id}`
+          : rec.url || `/product/${rec.id}`,
+      }
+    })
     
     // FALLBACK: Use existing ticket creation system
     if (!ticketCreated && shouldCheckForTicket && shop) {
@@ -2004,7 +2017,7 @@ export async function POST(request: NextRequest) {
                 
                 if (result.success) {
                   ticketCreated = true
-                  ticketMessage = "✅ I've created a support ticket for you! Our team will review your issue and get back to you soon. Is there anything else I can help you with?"
+                  ticketMessage = "I've created a support ticket for you! Our team will review your request and get back to you within 24 hours. Is there anything else I can help you with?"
                 } else {
                   logger.warn("Failed to create ticket", { 
                     error: result.error,
@@ -2055,9 +2068,15 @@ export async function POST(request: NextRequest) {
     // Prepare response message
     let responseMessage = cleanedText.trim()
     
-    // If ticket was created, append confirmation message
+    // If ticket was created, replace the response with a natural, human-friendly message
     if (ticketCreated && ticketMessage) {
-      responseMessage = `${responseMessage}\n\n✅ ${ticketMessage}`
+      // If the cleaned text is empty or only contains technical info, use the ticket message
+      if (!responseMessage || responseMessage.length < 10) {
+        responseMessage = ticketMessage
+      } else {
+        // Otherwise, append the ticket confirmation naturally
+        responseMessage = `${responseMessage}\n\n${ticketMessage}`
+      }
     }
 
     // Save conversation history to Redis for memory

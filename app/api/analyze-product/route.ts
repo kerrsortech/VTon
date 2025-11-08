@@ -236,20 +236,87 @@ REMEMBER: Analyze USER PHOTO (first image) for userCharacteristics, and PRODUCT 
 
     logger.debug("AI response received")
 
-    const analysisText = response.text || ""
+    // Extract text from response - handle different response formats
+    let analysisText = ""
+    
+    try {
+      // Try direct text access first
+      if (response.text && typeof response.text === "string" && response.text.length > 0) {
+        analysisText = response.text
+      } 
+      // Try accessing through candidates/parts structure (like generate-image route)
+      else if (response.candidates && Array.isArray(response.candidates) && response.candidates.length > 0) {
+        const candidate = response.candidates[0]
+        if (candidate.content && candidate.content.parts) {
+          for (const part of candidate.content.parts) {
+            if (part.text && typeof part.text === "string") {
+              analysisText += part.text
+            }
+          }
+        }
+      }
+      // Fallback: try to stringify and extract
+      else if (typeof response === "object") {
+        const responseString = JSON.stringify(response)
+        const textMatch = responseString.match(/"text"\s*:\s*"([^"]+)"/)
+        if (textMatch) {
+          analysisText = textMatch[1]
+        }
+      }
+    } catch (extractError) {
+      logger.error("Error extracting text from AI response", { 
+        error: extractError instanceof Error ? extractError.message : String(extractError) 
+      })
+    }
 
-    const jsonMatch = analysisText.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
-      logger.error("Failed to parse JSON from response")
+    // Validate that we have text
+    if (!analysisText || analysisText.trim().length === 0) {
+      logger.error("Invalid AI response format", { 
+        textLength: analysisText.length, 
+        textType: typeof analysisText,
+        responseType: typeof response,
+        hasCandidates: !!(response as any).candidates,
+      })
       return NextResponse.json(
         {
-          error: "Failed to parse product analysis",
+          error: "Invalid AI response format",
+          details: "The AI service returned an empty or invalid response. Please try again.",
         },
         { status: 500 },
       )
     }
 
-    let productMetadata = JSON.parse(jsonMatch[0])
+    const jsonMatch = analysisText.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) {
+      logger.error("Failed to parse JSON from response", { 
+        analysisTextLength: analysisText.length,
+        analysisTextPreview: analysisText.substring(0, 200)
+      })
+      return NextResponse.json(
+        {
+          error: "Failed to parse product analysis",
+          details: "The AI service response could not be parsed. Please try again.",
+        },
+        { status: 500 },
+      )
+    }
+
+    let productMetadata
+    try {
+      productMetadata = JSON.parse(jsonMatch[0])
+    } catch (parseError) {
+      logger.error("Failed to parse JSON", { 
+        error: parseError instanceof Error ? parseError.message : String(parseError),
+        jsonMatch: jsonMatch[0].substring(0, 200)
+      })
+      return NextResponse.json(
+        {
+          error: "Failed to parse product analysis",
+          details: "The AI service returned invalid JSON. Please try again.",
+        },
+        { status: 500 },
+      )
+    }
     logger.debug("Product metadata extracted", { category: productMetadata.productCategory })
 
     // Enhance product description with page analysis if available

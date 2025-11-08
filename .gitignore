@@ -43,6 +43,12 @@ next-env.d.ts
 *~
 .DS_Store
 
+# Cursor MCP Configuration - NEVER COMMIT (contains API keys)
+.cursor/mcp.json
+mcp.json
+*.mcp.json
+!mcp.json.example
+
 # Database credentials - SECURITY
 DATABASE_URL
 *neondb*

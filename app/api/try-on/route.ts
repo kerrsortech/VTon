@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
   try {
     logger.info("Try-on request started", { requestId })
 
-    // REQUIRE AUTHENTICATION: Get Shopify customer ID from form data or header (required)
+    // Get user identification: Shopify customer ID (preferred) or anonymous user ID (fallback)
     const formData = await request.formData()
     let shopifyCustomerId = formData.get("shopifyCustomerId") as string | null
     
@@ -51,16 +51,25 @@ export async function POST(request: NextRequest) {
       shopifyCustomerId = request.headers.get("x-shopify-customer-id")
     }
     
-    if (!shopifyCustomerId) {
-      logger.warn("Try-on request rejected: No Shopify customer ID provided", { requestId })
+    // Get anonymous user ID as fallback (from cookie or header)
+    const userId = formData.get("userId") as string | null ||
+                   request.headers.get("x-user-id") ||
+                   request.cookies.get("closelook-user-id")?.value ||
+                   null
+    
+    // Require at least one form of user identification
+    if (!shopifyCustomerId && !userId) {
+      logger.warn("Try-on request rejected: No user identification provided", { requestId })
       return NextResponse.json(
         {
-          error: "Authentication required",
-          details: "You must be signed in to your Shopify account to use the virtual try-on feature. Please sign in and try again.",
+          error: "User identification required",
+          details: "Please upload an image first or sign in to your Shopify account to use the virtual try-on feature.",
         },
         { status: 401 },
       )
     }
+    
+    logger.debug("User identification", { requestId, shopifyCustomerId, userId })
 
     const userPhoto = formData.get("userPhoto") as File
     const fullBodyUrl = formData.get("fullBodyUrl") as string | null
@@ -585,7 +594,7 @@ export async function POST(request: NextRequest) {
         product_name: effectiveProductName || undefined,
         product_url: productUrl || undefined,
         product_image_url: productImageBlobs[0]?.url || undefined,
-        customer_id: customerId || undefined,
+        customer_id: customerId || userId || undefined,
         customer_email: customerEmail || undefined,
         shopify_customer_id: shopifyCustomerId || undefined,
         metadata: {

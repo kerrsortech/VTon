@@ -1147,6 +1147,26 @@ export function GlobalChatbot({ currentProduct, className }: GlobalChatbotProps)
           headers["x-shopify-customer-id"] = shopifyCustomerId.toString()
         }
 
+        // Get anonymous user ID as fallback (from cookie)
+        // This helps track users even when Shopify customer ID is not available
+        const getCookie = (name: string): string | null => {
+          if (typeof document === "undefined") return null
+          const value = `; ${document.cookie}`
+          const parts = value.split(`; ${name}=`)
+          if (parts.length === 2) {
+            return parts.pop()?.split(";").shift() || null
+          }
+          return null
+        }
+        
+        const userId = getCookie("closelook-user-id")
+        if (userId) {
+          // Pass userId for tracking even if Shopify customer ID is available
+          // The backend will prefer Shopify customer ID but can use userId as fallback
+          formData.append("userId", userId)
+          headers["x-user-id"] = userId
+        }
+
         const customerEmail = (window as any).Shopify?.customer?.email
         if (customerEmail) {
           formData.append("customerEmail", customerEmail)

@@ -26,9 +26,16 @@ export interface Ticket {
 
 export function extractTicketData(aiResponse: string): TicketData | null;
 
+export interface AdditionalTicketData {
+  customerName?: string;
+  customerEmail?: string;
+  conversationHistory?: Array<{ role: string; content: string }>;
+}
+
 export function createSupportTicket(
   ticketData: TicketData,
-  sessionData: SessionData
+  sessionData: SessionData,
+  additionalData?: AdditionalTicketData
 ): Promise<string>;
 
 export function formatTicketResponse(
